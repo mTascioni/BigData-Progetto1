@@ -5,4 +5,3 @@ __pycache__/
 *.log
 ros/bags/*.bag
 ros/bags/*.bag.active
-backend/src/config/HuggingFace_credentials.json
