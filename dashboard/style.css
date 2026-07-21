@@ -38,11 +38,48 @@ main {
   flex-wrap: wrap;
 }
 
+.section-title {
+  margin: 0.5rem 1rem -0.25rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #7c8697;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-top: 1px solid #232c39;
+  padding-top: 1.1rem;
+}
+
+/* Riga principale: mappa in primo piano (spazio quanto le serve) e pannello
+   di controllo/chat a lato, in una colonna piu' stretta -- invece di N card
+   sparse alla pari, cosi' e' chiaro a colpo d'occhio "cosa guardo" (mappa) e
+   "cosa posso fare" (avviare una simulazione, chiedere ai dati). Tutto il
+   resto (stato robot, eventi, errori) sta deliberatamente sotto, in
+   .status-row: e' informazione di supporto, non il primo sguardo. */
+.hero {
+  align-items: stretch;
+}
+
+.hero .map-panel {
+  flex: 3 1 640px;
+}
+
+.hero .side-panel {
+  flex: 1 1 340px;
+  max-width: 420px;
+}
+
 .map-panel {
   background: #161d27;
   border: 1px solid #232c39;
   border-radius: 8px;
   padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.map-panel canvas {
+  width: 100%;
+  height: auto;
 }
 
 canvas {
@@ -120,6 +157,32 @@ canvas {
   font-size: 0.95rem;
   margin: 0 0 0.35rem;
 }
+
+.tab-bar {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid #232c39;
+}
+
+.tab-btn {
+  align-self: auto;
+  background: transparent;
+  color: #7c8697;
+  border: none;
+  border-radius: 0;
+  padding: 0.4rem 0.2rem;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  font-size: 0.82rem;
+}
+
+.tab-btn.active {
+  color: #e6e9ef;
+  border-bottom-color: #2b6cb0;
+}
+
+.tab-btn:hover { color: #e6e9ef; }
 
 .hint {
   font-size: 0.78rem;
@@ -233,11 +296,11 @@ button:disabled { opacity: 0.6; cursor: wait; }
   white-space: nowrap;
 }
 
-.bottom-row {
+.status-row {
   align-items: stretch;
 }
 
-.fleet-table-card, .generator-card, .real-fleet-card {
+.fleet-table-card, .real-fleet-card {
   flex: 1;
   min-width: 380px;
 }

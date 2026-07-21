@@ -305,7 +305,19 @@ def to_kafka(df, topic, key_col=None):
 
 
 def main():
-    spark = SparkSession.builder.appName("shf-detection").getOrCreate()
+    # Il default di Spark (200 partizioni di shuffle) e' pensato per cluster
+    # con decine di core: qui detection_job gira con 2 core totali e i due
+    # shuffle (groupBy per-robot del livelock, groupBy+window del deadlock)
+    # hanno al massimo una manciata di chiavi per micro-batch (un robot_id o
+    # un current_edge per messaggio) -- con 200 partizioni, ogni trigger
+    # schedula ~200 task quasi tutti vuoti invece di ~4, overhead puro che
+    # si somma alla contesa con Gazebo (vedi start-master.sh). Impostato a
+    # un multiplo piccolo di spark.cores.max invece che al default.
+    spark = (
+        SparkSession.builder.appName("shf-detection")
+        .config("spark.sql.shuffle.partitions", "4")
+        .getOrCreate()
+    )
     spark.sparkContext.setLogLevel("WARN")
 
     node_pos, edges = load_graph(CONFIG_DIR)

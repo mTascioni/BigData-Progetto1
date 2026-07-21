@@ -37,19 +37,26 @@ echo "[start-master] master pronto, avvio query_service.py e detection_job.py"
 # invece di lasciare la pipeline morta finche' qualcuno non se ne accorge e
 # rilancia a mano.
 
-# Split 2/4 fra query_service e detection_job (era 3/8, poi 2/10 costruendo
-# test/ il 2026-07-21, ora 2/4 lo stesso giorno): quel 10 era tarato per il carico
-# PESANTE del generatore sintetico (migliaia di robot-token, Passo 12/13),
-# non per la flotta ROS reale. Sulla flotta reale (4-8 robot) e' un problema
-# diverso e piu' serio: 10 core dati a Spark competono direttamente con
-# Gazebo per la CPU della stessa macchina, e l'operatore stateful del
-# livelock (applyInPandasWithState, Passo 7) apre un processo Python
-# separato per micro-batch -- osservato empiricamente decine di processi
-# "pyspark.daemon" concorrenti anche con soli 4 robot reali. Risultato
-# osservato il 2026-07-21: micro-batch da 2s che ne impiegavano 30-65,
-# fleet_state quasi fermo per decine di secondi alla volta -> sulla
-# dashboard sembra che "la simulazione vada a scatti", ma la causa reale e'
-# contesa di CPU fra Spark e Gazebo, non un problema di rete o di canvas.
+# Split 2/2 fra query_service e detection_job (era 3/8, poi 2/10 costruendo
+# test/ il 2026-07-21, poi 2/4, ora 2/2 lo stesso giorno, insieme al fix di
+# spark.sql.shuffle.partitions in detection_job.py): quel 10 era tarato per
+# il carico PESANTE del generatore sintetico (migliaia di robot-token,
+# Passo 12/13), non per la flotta ROS reale. Sulla flotta reale (4-8 robot)
+# e' un problema diverso e piu' serio: i core dati a Spark competono
+# direttamente con Gazebo per la CPU della stessa macchina, e l'operatore
+# stateful del livelock (applyInPandasWithState, Passo 7) apre un processo
+# Python separato per micro-batch -- osservato empiricamente decine di
+# processi "pyspark.daemon" concorrenti anche con soli 4 robot reali.
+# Risultato osservato il 2026-07-21: micro-batch da 2s che ne impiegavano
+# 30-65 (e fino a 79 su una macchina ancora piu' satura), fleet_state quasi
+# fermo per decine di secondi alla volta -> sulla dashboard sembra che "la
+# simulazione vada a scatti", ma la causa reale e' contesa di CPU fra Spark
+# e Gazebo, non un problema di rete o di canvas. Sceso da 4 a 2 core per
+# detection_job perche' il volume dati della flotta reale e' bassissimo
+# (4-8 robot a 2Hz): il costo non era processare i dati, era l'overhead di
+# scheduling di Spark stesso -- vedi il fix di shuffle.partitions qui sotto,
+# che riduce quell'overhead alla radice ed e' cio' che rende sostenibile
+# scendere a 2 core senza perdere capacita' sul generatore sintetico.
 # query_service e' interattivo/a bassa frequenza, 2 core bastano comunque.
 (
   set +e   # altrimenti "set -e" ereditato dallo script uccide la subshell al primo fallimento, prima che il loop possa ritentare
@@ -77,7 +84,7 @@ echo "[start-master] master pronto, avvio query_service.py e detection_job.py"
       --master spark://spark-master:7077 \
       --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.6 \
       --conf spark.jars.ivy=/opt/bitnami/spark/ivy-cache \
-      --conf spark.cores.max=4 \
+      --conf spark.cores.max=2 \
       --conf spark.sql.streaming.stateStore.stateSchemaCheck=false \
       /opt/shf/streaming/detection_job.py >> /tmp/detection_job.log 2>&1
     echo "[start-master] detection_job.py terminato (exit $?), riavvio tra 5s..." >> /tmp/detection_job.log

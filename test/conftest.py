@@ -141,15 +141,26 @@ def _pause_real_simulation():
     sviluppo insieme a Spark, causando batch Spark in ritardo e falsi
     segnali nei test (osservato: detection_job con batch da 10s che ne
     impiegava 15-19). Messa in pausa per tutta la sessione di test, rimessa
-    su alla fine -- se supervisorctl non e' raggiungibile (es. suite
-    lanciata fuori dal container ros) si prosegue comunque, solo piu' lenti."""
+    su alla fine -- ma solo se era davvero gia' in esecuzione prima (bug
+    reale trovato il 2026-07-21: `supervisorctl stop` ritorna comunque
+    successo anche se il programma era gia' fermo, quindi un controllo
+    basato solo su "il comando stop e' andato a buon fine" la riavviava
+    sempre in teardown, anche quando nessuno l'aveva mai avviata). Se
+    supervisorctl non e' raggiungibile (es. suite lanciata fuori dal
+    container ros) si prosegue comunque, solo piu' lenti."""
+    was_running = False
     try:
-        subprocess.run(["supervisorctl", "stop", "sim_multi_robot"], check=True, capture_output=True, timeout=15)
-        paused = True
+        status = subprocess.run(
+            ["supervisorctl", "status", "sim_multi_robot"],
+            capture_output=True, timeout=15, text=True,
+        )
+        was_running = "RUNNING" in status.stdout
+        if was_running:
+            subprocess.run(["supervisorctl", "stop", "sim_multi_robot"], check=True, capture_output=True, timeout=15)
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
-        paused = False
+        was_running = False
     yield
-    if paused:
+    if was_running:
         # supervisord ha startsecs=15 per questo programma (aspetta che resti
         # su 15s prima di confermare l'avvio): il timeout qui deve essere
         # piu' largo di quello, altrimenti scade sempre per pochi istanti.

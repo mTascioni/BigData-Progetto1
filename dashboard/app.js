@@ -553,6 +553,30 @@ function setupSimControls() {
   });
 }
 
+// Card "Avvia simulazione": un solo posto per scegliere fra flotta reale
+// (ROS/Gazebo) e generatore sintetico, invece di due pannelli separati in
+// giro per la pagina -- switch puramente visivo, nessuno dei due form viene
+// distrutto (restano gli stessi #sim-control-form/#generator-form di prima,
+// polling e stato continuano a girare anche sul tab non visibile).
+function setupSimTabs() {
+  const buttons = document.querySelectorAll("#sim-tabs .tab-btn");
+  const panels = {
+    real: document.getElementById("sim-tab-real"),
+    synthetic: document.getElementById("sim-tab-synthetic"),
+  };
+  buttons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      buttons.forEach((b) => {
+        b.classList.toggle("active", b === btn);
+        b.setAttribute("aria-selected", b === btn ? "true" : "false");
+      });
+      for (const [name, panel] of Object.entries(panels)) {
+        panel.hidden = name !== btn.dataset.tab;
+      }
+    });
+  });
+}
+
 function setupRealFaultForm() {
   document.getElementById("real-fault-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -857,6 +881,7 @@ async function main() {
   setupGeneratorForm();
   setupRealFaultForm();
   setupSimControls();
+  setupSimTabs();
   setupEvalButtons();
   loadRealFleetConfig();
   refreshPredictions();

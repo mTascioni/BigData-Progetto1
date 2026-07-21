@@ -11,7 +11,7 @@
     <div id="conn-status" class="badge badge-off">websocket: disconnesso</div>
   </header>
 
-  <main>
+  <main class="hero">
     <section class="map-panel">
       <div id="map-badge" class="map-badge">Vista: grafo reale (medium)</div>
       <canvas id="map" width="820" height="480"></canvas>
@@ -26,27 +26,66 @@
         <span><i class="line deadlock"></i> arco in deadlock</span>
         <span><i class="dot synthetic"></i> anello tratteggiato = robot sintetico (generatore)</span>
       </div>
-      <p class="hint">Un robot reale esiste solo sul grafo reale ("medium"): mentre e' attivo un run del generatore su un altro preset, i robot reali restano fuori dalla mappa (ma non dalla tabella qui sotto) per non mescolare due sistemi di coordinate diversi.</p>
+      <p class="hint">Un robot reale esiste solo sul grafo reale ("medium"): mentre e' attivo un run del generatore su un altro preset, i robot reali restano fuori dalla mappa (ma non dalle tabelle qui sotto) per non mescolare due sistemi di coordinate diversi.</p>
     </section>
 
     <aside class="side-panel">
-      <section class="card">
-        <h2>Eventi recenti</h2>
-        <p class="hint">Deadlock/livelock rilevati in streaming (Passo 7), evidenziati anche sulla mappa per ~8s.</p>
-        <ul id="events-list"></ul>
-        <p id="events-empty" class="hint">Nessun evento comportamentale rilevato finora.</p>
-      </section>
+      <section class="card sim-control-card">
+        <h2>Avvia simulazione</h2>
+        <div class="tab-bar" id="sim-tabs" role="tablist">
+          <button type="button" class="tab-btn active" data-tab="real" role="tab" aria-selected="true">Flotta reale (ROS/Gazebo)</button>
+          <button type="button" class="tab-btn" data-tab="synthetic" role="tab" aria-selected="false">Generatore sintetico</button>
+        </div>
 
-      <section class="card">
-        <h2>Robot a rischio</h2>
-        <p class="hint">Previsioni offline (regressione lineare), aggiornate ogni 5s.</p>
-        <table id="predictions-table">
-          <thead>
-            <tr><th>Robot</th><th>Canale</th><th>Valore</th><th>Soglia</th><th>Lead time</th></tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-        <p id="predictions-empty" class="hint" hidden>Nessun robot con un trend a rischio al momento.</p>
+        <div id="sim-tab-real" class="tab-panel">
+          <p class="hint">Passo 5/14: robot ROS/Gazebo veri, con corridoi fisici. Un'anomalia di salute rilevata manda automaticamente il robot in riparazione e dispaccia un robot di riserva sulla sua missione (dettagli e controlli sui singoli robot piu' sotto, in "Flotta reale").</p>
+          <form id="sim-control-form" class="form-row">
+            <label>Scala
+              <select id="sim-scale-select">
+                <option value="small">small (4 robot: R1-R3 + R4 riserva)</option>
+                <option value="large">large (8 robot: R1/R2/R3/R5/R6/R7 + R4/R8 riserva)</option>
+              </select>
+            </label>
+            <div class="form-actions">
+              <button type="submit" id="sim-start-btn">Avvia simulazione</button>
+              <button type="button" id="sim-stop-btn" disabled>Ferma simulazione</button>
+            </div>
+          </form>
+          <div id="sim-status" class="hint">Simulazione ferma.</div>
+        </div>
+
+        <div id="sim-tab-synthetic" class="tab-panel" hidden>
+          <p class="hint">Passo 12: robot-token generati via software (nessun ROS/Gazebo), utile per test di carico e scenari con guasti pianificati. Non tocca la simulazione ROS/Gazebo reale.</p>
+          <form id="generator-form">
+            <div class="form-row">
+              <label>Topologia
+                <select id="gen-preset">
+                  <option value="small">Piccola (6 nodi)</option>
+                  <option value="medium" selected>Media (grafo reale, 10 nodi)</option>
+                  <option value="large">Grande (griglia 5x5, 25 nodi)</option>
+                </select>
+              </label>
+              <label>Numero robot
+                <input type="number" id="gen-num-robots" value="20" min="1" max="20000" />
+              </label>
+              <label>Hz per robot
+                <input type="number" id="gen-hz" value="2" min="0.1" max="50" step="0.1" />
+              </label>
+              <label>Durata (s)
+                <input type="number" id="gen-duration" value="60" min="1" max="3600" />
+              </label>
+            </div>
+
+            <div id="gen-faults-list"></div>
+            <button type="button" id="gen-add-fault">+ aggiungi guasto</button>
+
+            <div class="form-actions">
+              <button type="submit" id="gen-start-btn">Avvia</button>
+              <button type="button" id="gen-stop-btn" disabled>Ferma</button>
+            </div>
+          </form>
+          <div id="gen-status" class="hint">Nessun run in corso.</div>
+        </div>
       </section>
 
       <section class="card">
@@ -61,7 +100,8 @@
     </aside>
   </main>
 
-  <main class="bottom-row">
+  <h2 class="section-title">Stato della flotta ed eventi</h2>
+  <main class="status-row">
     <section class="card fleet-table-card">
       <h2>Tutti i robot</h2>
       <p class="hint">Valori live da <code>fleet_state</code> (include anche i robot-token del generatore sintetico).</p>
@@ -80,22 +120,8 @@
     </section>
 
     <section class="card real-fleet-card">
-      <h2>Flotta reale — controllo</h2>
-      <p class="hint">Passo 14: guasti live sui robot ROS/Gazebo reali (finiscono nella telemetria vera, li trova il modello, non un canale a parte). Un'anomalia di salute rilevata manda automaticamente il robot in riparazione e dispaccia il robot di riserva sulla sua missione.</p>
-
-      <form id="sim-control-form" class="form-row">
-        <label>Scala
-          <select id="sim-scale-select">
-            <option value="small">small (4 robot: R1-R3 + R4 riserva)</option>
-            <option value="large">large (8 robot: R1/R2/R3/R5/R6/R7 + R4/R8 riserva)</option>
-          </select>
-        </label>
-        <div class="form-actions">
-          <button type="submit" id="sim-start-btn">Avvia simulazione</button>
-          <button type="button" id="sim-stop-btn" disabled>Ferma simulazione</button>
-        </div>
-      </form>
-      <div id="sim-status" class="hint">Simulazione ferma.</div>
+      <h2>Flotta reale — dettaglio</h2>
+      <p class="hint">Guasti live sui robot ROS/Gazebo reali (finiscono nella telemetria vera, li trova il modello, non un canale a parte).</p>
 
       <table id="real-fleet-status">
         <thead><tr><th>Robot</th><th>Stato</th><th>Goal</th><th></th></tr></thead>
@@ -126,47 +152,31 @@
       <div id="real-fleet-status-msg" class="hint"></div>
     </section>
 
-    <section class="card generator-card">
-      <h2>Genera carico sintetico</h2>
-      <p class="hint">Pannello di controllo del generatore del Passo 12: avvia robot-token su un grafo a scelta, con guasti opzionali. Solo per test/carico, non tocca la simulazione ROS/Gazebo reale.</p>
+    <section class="card">
+      <h2>Eventi recenti</h2>
+      <p class="hint">Deadlock/livelock rilevati in streaming (Passo 7), evidenziati anche sulla mappa per ~8s.</p>
+      <ul id="events-list"></ul>
+      <p id="events-empty" class="hint">Nessun evento comportamentale rilevato finora.</p>
+    </section>
 
-      <form id="generator-form">
-        <div class="form-row">
-          <label>Topologia
-            <select id="gen-preset">
-              <option value="small">Piccola (6 nodi)</option>
-              <option value="medium" selected>Media (grafo reale, 10 nodi)</option>
-              <option value="large">Grande (griglia 5x5, 25 nodi)</option>
-            </select>
-          </label>
-          <label>Numero robot
-            <input type="number" id="gen-num-robots" value="20" min="1" max="20000" />
-          </label>
-          <label>Hz per robot
-            <input type="number" id="gen-hz" value="2" min="0.1" max="50" step="0.1" />
-          </label>
-          <label>Durata (s)
-            <input type="number" id="gen-duration" value="60" min="1" max="3600" />
-          </label>
-        </div>
-
-        <div id="gen-faults-list"></div>
-        <button type="button" id="gen-add-fault">+ aggiungi guasto</button>
-
-        <div class="form-actions">
-          <button type="submit" id="gen-start-btn">Avvia</button>
-          <button type="button" id="gen-stop-btn" disabled>Ferma</button>
-        </div>
-      </form>
-
-      <div id="gen-status" class="hint">Nessun run in corso.</div>
+    <section class="card">
+      <h2>Robot a rischio</h2>
+      <p class="hint">Previsioni offline (regressione lineare), aggiornate ogni 5s.</p>
+      <table id="predictions-table">
+        <thead>
+          <tr><th>Robot</th><th>Canale</th><th>Valore</th><th>Soglia</th><th>Lead time</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p id="predictions-empty" class="hint" hidden>Nessun robot con un trend a rischio al momento.</p>
     </section>
   </main>
 
+  <h2 class="section-title">Esperimenti (Passo 13)</h2>
   <main class="eval-row">
     <section class="card eval-card" id="eval-effectiveness-card">
       <h2>Risultati sperimentazioni — effectiveness</h2>
-      <p class="hint"><code>eval/run_effectiveness.py</code> (Passo 13): precision/recall della detection, accuratezza delle previsioni, execution accuracy del layer TAG. Si lancia on-demand: i risultati compaiono qui man mano che ogni sotto-esperimento finisce.</p>
+      <p class="hint"><code>eval/run_effectiveness.py</code>: precision/recall della detection, accuratezza delle previsioni, execution accuracy del layer TAG. Si lancia on-demand: i risultati compaiono qui man mano che ogni sotto-esperimento finisce.</p>
       <div class="form-actions">
         <button type="button" id="eval-effectiveness-run-btn">Esegui ora</button>
       </div>
@@ -177,7 +187,7 @@
 
     <section class="card eval-card" id="eval-efficiency-card">
       <h2>Risultati sperimentazioni — efficiency</h2>
-      <p class="hint"><code>eval/run_efficiency.py</code> (Passo 13): throughput a carico crescente, latenza onset&rarr;alert. Si lancia on-demand: i risultati compaiono qui man mano che ogni sotto-esperimento finisce.</p>
+      <p class="hint"><code>eval/run_efficiency.py</code>: throughput a carico crescente, latenza onset&rarr;alert. Si lancia on-demand: i risultati compaiono qui man mano che ogni sotto-esperimento finisce.</p>
       <div class="form-actions">
         <button type="button" id="eval-efficiency-run-btn">Esegui ora</button>
       </div>
