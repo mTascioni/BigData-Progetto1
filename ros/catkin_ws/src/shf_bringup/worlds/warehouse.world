@@ -1,0 +1,118 @@
+<?xml version="1.0" ?>
+<!--
+  Mondo Gazebo del magazzino (Passo 14): stesse coordinate di
+  config/warehouse_graph.json, ancora un piano prevalentemente vuoto (i
+  robot navigano per grafo logico, non per SLAM/mappa statica - vedi
+  docs/passi/03-bringup-ros-gazebo.md), con l'aggiunta di due "tunnel" di
+  pareti statiche sui due choke point a corsia singola del grafo (C-F,
+  C-H, capacity=1) cosi' che quella capacita' sia un vincolo fisico reale,
+  non solo un numero nel JSON.
+
+  Larghezza libera del corridoio: 0.8m (vedi docs/passi/14 per la nota di
+  tuning: e' un valore di partenza, verificato empiricamente che basti per
+  un burger e non per due affiancati -- non un dato che si puo' fissare a
+  tavolino senza provarlo).
+-->
+<sdf version="1.6">
+  <world name="default">
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+    <include>
+      <uri>model://sun</uri>
+    </include>
+
+    <physics type="ode">
+      <real_time_update_rate>1000.0</real_time_update_rate>
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1</real_time_factor>
+      <ode>
+        <solver>
+          <type>quick</type>
+          <iters>150</iters>
+          <precon_iters>0</precon_iters>
+          <sor>1.400000</sor>
+          <use_dynamic_moi_rescaling>1</use_dynamic_moi_rescaling>
+        </solver>
+        <constraints>
+          <cfm>0.00001</cfm>
+          <erp>0.2</erp>
+          <contact_max_correcting_vel>2000.000000</contact_max_correcting_vel>
+          <contact_surface_layer>0.01000</contact_surface_layer>
+        </constraints>
+      </ode>
+    </physics>
+
+    <scene>
+      <ambient>0.4 0.4 0.4 1</ambient>
+      <background>0.7 0.7 0.7 1</background>
+      <shadows>false</shadows>
+    </scene>
+
+    <gui fullscreen="0">
+      <camera name="user_camera">
+        <pose>15 -25 25 0 0.7 1.57</pose>
+        <view_controller>orbit</view_controller>
+      </camera>
+    </gui>
+
+    <!-- Corridoio C(20,0) -> F(20,10): parete ovest e parete est, gap
+         libero centrato su x=20, con margine alle due estremita' (vicino
+         ai nodi C e F) per non intralciare l'ingresso/uscita. -->
+    <model name="wall_cf_west">
+      <static>true</static>
+      <pose>19.55 5 0.25 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.1 8 0.5</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.1 8 0.5</size></box></geometry>
+          <material><ambient>0.55 0.55 0.55 1</ambient></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_cf_east">
+      <static>true</static>
+      <pose>20.45 5 0.25 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.1 8 0.5</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.1 8 0.5</size></box></geometry>
+          <material><ambient>0.55 0.55 0.55 1</ambient></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Corridoio C(20,0) -> H(20,-10): stessa logica, specchiata sotto
+         l'asse principale. -->
+    <model name="wall_ch_west">
+      <static>true</static>
+      <pose>19.55 -5 0.25 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.1 8 0.5</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.1 8 0.5</size></box></geometry>
+          <material><ambient>0.55 0.55 0.55 1</ambient></material>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_ch_east">
+      <static>true</static>
+      <pose>20.45 -5 0.25 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.1 8 0.5</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.1 8 0.5</size></box></geometry>
+          <material><ambient>0.55 0.55 0.55 1</ambient></material>
+        </visual>
+      </link>
+    </model>
+  </world>
+</sdf>

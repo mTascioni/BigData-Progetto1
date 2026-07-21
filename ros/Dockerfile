@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip3 install --no-cache-dir --upgrade confluent-kafka==2.4.0 \
-    pytest requests pandas numpy pyarrow matplotlib
+    pytest requests pandas numpy pyarrow
 
 COPY catkin_ws/src /root/catkin_ws/src
 RUN bash -c "source /opt/ros/noetic/setup.bash && cd /root/catkin_ws && catkin_make" \

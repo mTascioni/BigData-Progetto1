@@ -16,6 +16,7 @@ Piano operativo passo-passo: vedi `PLAN.md`.
 - **La dashboard è guidata dalla pipeline** (Spark → topic Kafka `fleet_state` → backend Node → websocket), così vede tutti i robot.
 - **Ground truth:** ogni guasto iniettato va loggato in `injected_faults`; è la base per precision/recall.
 - **Si costruisce un passo alla volta** seguendo `PLAN.md`.
+- **Eccezione deliberata (Passo 14): un'anomalia di salute rilevata su un robot reale chiude l'anello.** Fino al Passo 13 il sistema era puramente diagnostico (detect/predict/alert, nessuna azione verso ROS). Su richiesta esplicita dell'utente (demo dal vivo), per la sola **flotta reale** un'anomalia manda il robot colpito verso un nodo di riparazione e dispaccia un robot di riserva dedicato (R4) sulla sua missione — comando minimo ("vai al nodo X"), non robotica di rimedio: resta coerente con "il robot è solo la sorgente dati" perché il *contenuto* della decisione (quale nodo, quale missione) è logica applicativa nel backend, non nel robot. Il generatore sintetico (Passo 12) non è toccato da questo anello. Vedi `docs/passi/14-flotta-reale-e-self-healing.md`.
 
 ## Stack
 

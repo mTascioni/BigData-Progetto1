@@ -6,6 +6,8 @@ Passi ordinati, ciascuno con il suo deliverable. Contesto e invarianti: vedi `CL
 
 **Tutti e 13 i passi completati (2026-07-21).** Documentazione dettagliata di ciascuno — scelte tecniche, problemi incontrati, comandi di verifica — in `docs/passi/01-...md` fino a `13-...md`.
 
+**Passo 14, estensione oltre il piano originale (2026-07-21):** su richiesta dell'utente per una demo dal vivo, un mondo Gazebo con corridoi fisici stretti sui choke point del grafo (deadlock/livelock ora osservabili su dati ROS reali, non solo sintetici), iniezione di guasti live sui robot reali dentro il topic `telemetry` vero, e un primo anello di "self healing" reale: un'anomalia di salute rilevata manda il robot in riparazione e dispaccia un quarto robot di riserva (R4) sulla sua missione. Eccezione deliberata e documentata all'invariante "solo diagnosi" (vedi `CLAUDE.md`). Dettagli in `docs/passi/14-flotta-reale-e-self-healing.md`.
+
 **2026-07-21**, prima di iniziare il Passo 13: corretto un bug reale di falsi positivi nella detection di livelock (Passo 7, vedi `docs/passi/07-detection-streaming.md`), tre correzioni alla dashboard (Passo 11, vedi `docs/passi/11-dashboard.md`), e l'intera pipeline ora si avvia con un solo `docker compose up -d` senza comandi manuali (vedi `docs/passi/01-scaffold-infrastruttura.md`, sezione "Avvio a comando singolo").
 
 Aggiunta anche una suite di test pass/fail in `test/` (distinta dal futuro `eval/` del Passo 13: qui si verifica correttezza, non si producono numeri per la tesina) — 23 test su schema dei messaggi, ground truth dei guasti, precision/recall della detection, accuratezza delle previsioni, execution accuracy del TAG, throughput/latenza. Costruendola è emerso un **secondo bug indipendente** di falsi positivi nel livelock (`outputMode("update")` valutava finestre ancora parzialmente popolate), corretto con `outputMode("append")` — vedi `docs/passi/07-detection-streaming.md` e `test/README.md`. Tutti i 23 test passano.
@@ -83,8 +85,8 @@ Robot come token sul grafo, **stesso schema messaggi**, a volume alzabile (decin
 `eval/`:
 - **Efficiency:** scalabilità (throughput/latency vs carico, punto di rottura), latenza onset->alert.
 - **Effectiveness:** detection (precision/recall/F1 vs `injected_faults`, falsi positivi nel tempo); previsione (accuratezza forecast + lead time); execution accuracy del TAG.
-**Esteso oltre il piano originale** (su richiesta): i risultati sono visualizzati "in diretta" in un pannello dedicato in fondo alla dashboard (grafici incorporati + download CSV/PNG), non solo su file — vedi `docs/passi/13-valutazione-sperimentale.md`.
-**Produce:** i numeri per il report — precision/recall/F1 detection = 1.00/1.00/1.00, errore medio previsione 1.6s, TAG accuracy 21/22 (95%), punto di rottura throughput ~40000 msg/s. → `docs/passi/13-valutazione-sperimentale.md`
+**Esteso oltre il piano originale** (su richiesta): i risultati sono visualizzati in un pannello dedicato in fondo alla dashboard, non solo su file. Dal 2026-07-21 il pannello lancia i run **on-demand** ("Esegui ora") e li mostra **davvero in diretta**, sotto-esperimento per sotto-esperimento man mano che finiscono (barre live, niente più PNG pre-generati/refresh a 30s) — vedi `docs/passi/13-valutazione-sperimentale.md`.
+**Produce:** i numeri per il report — precision/recall/F1 detection = 1.00/1.00/1.00 (nella verifica originale; un run di verifica dell'estensione "live" ha misurato 0/0/nan, da ri-controllare prima di citarlo in tesina, vedi doc), errore medio previsione 1.6s, TAG accuracy 21/22 (95%), punto di rottura throughput ~40000 msg/s. → `docs/passi/13-valutazione-sperimentale.md`
 
 ---
 

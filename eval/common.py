@@ -1,23 +1,39 @@
 """Helper condivisi dagli script di valutazione sperimentale (Passo 13).
 
 A differenza di test/conftest.py (suite pytest pass/fail, verifica di
-correttezza) questi script producono NUMERI e GRAFICI per la tesina, letti
-anche dal pannello "Risultati sperimentazioni" della dashboard (Passo 11,
-estensione). Ogni run scrive in una cartella propria sotto /data/eval/ (sul
-volume Docker condiviso `shf-data`, cosi' backend/dashboard possono
-leggerli) e aggiorna un indice condiviso `/data/eval/index.json`.
+correttezza) questi script producono NUMERI per la tesina, letti anche dal
+pannello "Risultati sperimentazioni" della dashboard -- che dal 2026-07-21
+lancia i run on-demand via eval_service.py e ne disegna i risultati live in
+JS/canvas, non piu' da PNG pre-generati (quelli, se servono per il PDF,
+vanno prodotti a parte). Ogni run scrive in una cartella propria sotto
+/data/eval/ (sul volume Docker condiviso `shf-data`, cosi' backend/dashboard
+possono leggerli) e aggiorna un indice condiviso `/data/eval/index.json`.
 """
 import json
+import math
 import os
 import time
 import uuid
 from datetime import datetime, timezone
 
-import matplotlib
-matplotlib.use("Agg")  # nessun display: si scrivono solo file PNG
-import matplotlib.pyplot as plt
 import requests
 from confluent_kafka import Consumer, Producer
+
+
+def json_safe(obj):
+    """NaN/Infinity sono float Python legali (precision/f1 diventano NaN
+    quando TP+FP=0, caso normale, non un errore) ma non JSON valido: sia il
+    fetch() della dashboard sia JSON.parse in Node vanno in eccezione su un
+    letterale NaN nel body, silenziosamente (interrompe il polling live di
+    eval_service.py proprio quando arriva il primo risultato). Si convertono
+    in null prima di scrivere index.json o rispondere via HTTP."""
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [json_safe(v) for v in obj]
+    return obj
 
 KAFKA_BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP", "kafka:9092")
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://backend:3000")
@@ -120,17 +136,6 @@ def new_run_dir(run_type):
     return run_id, path
 
 
-def save_fig(fig, path, **kwargs):
-    fig.savefig(path, dpi=110, bbox_inches="tight", **kwargs)
-    plt.close(fig)
-
-
-def new_fig(figsize=(7, 4.5)):
-    fig, ax = plt.subplots(figsize=figsize)
-    fig.patch.set_facecolor("white")
-    return fig, ax
-
-
 def update_index(run_type, run_id, summary):
     """Aggiunge/aggiorna una entry nell'indice condiviso letto dal backend
     (GET /api/eval/results): un run per volta, il piu' recente per tipo e'
@@ -153,5 +158,5 @@ def update_index(run_type, run_id, summary):
     index.sort(key=lambda e: e["timestamp"])
 
     with open(index_path, "w") as f:
-        json.dump(index, f, indent=2, default=str)
+        json.dump(json_safe(index), f, indent=2, default=str)
     return index_path

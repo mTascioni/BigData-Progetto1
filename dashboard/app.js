@@ -405,6 +405,100 @@ function renderFleetTable() {
   }
 }
 
+// Passo 14: pannello di controllo della flotta reale (ROS/Gazebo). repairNode
+// e reserveNode arrivano da /api/fleet-control/config (letti da
+// config/experiment.json lato backend), non sono hardcoded qui.
+let realFleetConfig = { repair_node: null, reserve_node: null, reserve_robot_ids: [] };
+
+async function loadRealFleetConfig() {
+  try {
+    const res = await fetch("/api/fleet-control/config");
+    realFleetConfig = await res.json();
+  } catch {
+    // pannello disabilitato in pratica (status sempre "in servizio") se non disponibile
+  }
+}
+
+function realRobotStatus(robot) {
+  if (robot.goal_node && robot.goal_node === realFleetConfig.repair_node) return "in riparazione";
+  if (robot.goal_node && robot.goal_node === realFleetConfig.reserve_node) return "di riserva (rientrato)";
+  // una riserva mai ancora dispacciata non ha mai ricevuto un goal (nessun
+  // task all'avvio): goal_node resta vuoto, non c'e' modo di riconoscerla
+  // dal solo goal_node come le altre due condizioni sopra.
+  if (!robot.goal_node && realFleetConfig.reserve_robot_ids.includes(robot.robot_id)) return "di riserva";
+  return "in servizio";
+}
+
+function renderRealFleetPanel() {
+  const realRobots = [...robots.values()]
+    .filter((r) => REAL_ROBOT_ID_RE.test(r.robot_id))
+    .sort((a, b) => a.robot_id.localeCompare(b.robot_id));
+
+  const tbody = document.querySelector("#real-fleet-status tbody");
+  tbody.innerHTML = realRobots
+    .map((r) => {
+      const status = realRobotStatus(r);
+      const returnBtn =
+        status === "in riparazione"
+          ? `<button type="button" class="real-return-btn" data-robot="${r.robot_id}">Rimetti in servizio</button>`
+          : "";
+      return `<tr><td>${r.robot_id}</td><td>${status}</td><td>${r.goal_node ?? "-"}</td><td>${returnBtn}</td></tr>`;
+    })
+    .join("");
+
+  const select = document.getElementById("real-fault-robot");
+  const currentIds = new Set(realRobots.map((r) => r.robot_id));
+  const selectedIds = new Set([...select.options].map((o) => o.value));
+  if (currentIds.size !== selectedIds.size || [...currentIds].some((id) => !selectedIds.has(id))) {
+    const previous = select.value;
+    select.innerHTML = realRobots.map((r) => `<option value="${r.robot_id}">${r.robot_id}</option>`).join("");
+    if (currentIds.has(previous)) select.value = previous;
+  }
+
+  tbody.querySelectorAll(".real-return-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const robotId = btn.dataset.robot;
+      const msgEl = document.getElementById("real-fleet-status-msg");
+      try {
+        await fetch("/api/fleet-control/return-to-service", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ robot_id: robotId }),
+        });
+        msgEl.textContent = `${robotId} rimesso in servizio (verso il nodo di riserva).`;
+      } catch (err) {
+        msgEl.textContent = `Errore: ${err.message}`;
+      }
+    });
+  });
+}
+
+function setupRealFaultForm() {
+  document.getElementById("real-fault-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const robotId = document.getElementById("real-fault-robot").value;
+    const faultType = document.getElementById("real-fault-type").value;
+    const durationS = Number(document.getElementById("real-fault-duration").value);
+    const msgEl = document.getElementById("real-fleet-status-msg");
+    if (!robotId) {
+      msgEl.textContent = "Nessun robot reale disponibile al momento.";
+      return;
+    }
+    try {
+      const res = await fetch("/api/fleet-control/fault", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ robot_id: robotId, fault_type: faultType, duration_s: durationS }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      msgEl.textContent = `Guasto '${faultType}' iniettato su ${robotId} (durata ${durationS}s) -- finisce nella telemetria reale.`;
+    } catch (err) {
+      msgEl.textContent = `Errore: ${err.message}`;
+    }
+  });
+}
+
 function addFaultRow() {
   const container = document.getElementById("gen-faults-list");
   const row = document.createElement("div");
@@ -503,20 +597,23 @@ function setupGeneratorForm() {
   });
 }
 
-// Passo 13: file fissi prodotti da eval/run_effectiveness.py e
-// run_efficiency.py -- elencati qui invece che scoperti dinamicamente
-// (niente endpoint di listing sul backend, non serve per un set di file
-// concordato in anticipo dagli script).
-const EVAL_FILES = {
-  effectiveness: {
-    charts: ["detection_metrics.png", "prediction_error.png", "tag_accuracy.png"],
-    csvs: ["detection_robots.csv", "detection_summary.csv", "prediction_accuracy.csv", "tag_accuracy.csv"],
-  },
-  efficiency: {
-    charts: ["throughput_sweep.png", "latency_onset_alert.png"],
-    csvs: ["throughput_sweep.csv", "latency_onset_alert.csv"],
-  },
+// Estensione "risultati live" (2026-07-21): gli script eval/*.py non
+// scrivono piu' PNG (restano CSV/JSON, letti a valle per il PDF se serve).
+// La dashboard avvia il run on-demand (POST /api/eval/run) e ne segue
+// l'avanzamento via polling di GET /api/eval/status: eval_service.py
+// pubblica il risultato di ogni sotto-esperimento appena e' pronto, cosi'
+// qui si vedono comparire uno alla volta, non solo a run completato.
+const EVAL_CSV_FILES = {
+  effectiveness: ["detection_robots.csv", "detection_summary.csv", "prediction_accuracy.csv", "tag_accuracy.csv"],
+  efficiency: ["throughput_sweep.csv", "latency_onset_alert.csv"],
 };
+
+const EVAL_STAGE_LABELS = {
+  effectiveness: { detection: "detection", prediction: "previsione", tag: "TAG" },
+  efficiency: { throughput: "throughput sweep", latency: "latenza onset→alert" },
+};
+
+const evalPollTimers = { effectiveness: null, efficiency: null };
 
 function fmtPct(v) {
   return v == null || Number.isNaN(v) ? "-" : `${Math.round(v * 100)}%`;
@@ -526,61 +623,147 @@ function fmtS(v, digits = 1) {
   return v == null || Number.isNaN(v) ? "-" : `${Number(v).toFixed(digits)}s`;
 }
 
-function renderEffectivenessStats(summary) {
-  const d = summary.detection || {};
-  const p = summary.prediction || {};
-  const t = summary.tag || {};
+function evalBar(label, value01, valueText) {
+  const pct = value01 == null || Number.isNaN(value01) ? 0 : Math.max(0, Math.min(1, value01)) * 100;
   return `
-    <div class="eval-stats">
-      <div class="eval-stat"><span class="value">${fmtPct(d.precision)}</span><span class="label">precision detection</span></div>
-      <div class="eval-stat"><span class="value">${fmtPct(d.recall)}</span><span class="label">recall detection</span></div>
-      <div class="eval-stat"><span class="value">${fmtPct(d.f1)}</span><span class="label">F1 detection</span></div>
-      <div class="eval-stat"><span class="value">${fmtS(p.mae_lead_time_s)}</span><span class="label">errore medio previsione</span></div>
-      <div class="eval-stat"><span class="value">${fmtPct(t.accuracy)}</span><span class="label">TAG accuracy (${t.correct ?? "-"}/${t.total ?? "-"})</span></div>
+    <div class="eval-bar">
+      <span class="eval-bar-label">${label}</span>
+      <div class="eval-bar-track"><div class="eval-bar-fill" style="width:${pct}%"></div></div>
+      <span class="eval-bar-value">${valueText}</span>
     </div>`;
 }
 
-function renderEfficiencyStats(summary) {
-  const th = summary.throughput || {};
-  const la = summary.latency || {};
-  const breaking = th.breaking_point_msgs_s;
-  return `
-    <div class="eval-stats">
-      <div class="eval-stat"><span class="value">${breaking ? `${Math.round(breaking)}/s` : "non raggiunto"}</span><span class="label">punto di rottura</span></div>
+function renderEffectivenessResults(results) {
+  let html = "";
+  if (results.detection) {
+    const d = results.detection;
+    html += `<div class="eval-bars">
+      ${evalBar("precision", d.precision, fmtPct(d.precision))}
+      ${evalBar("recall", d.recall, fmtPct(d.recall))}
+      ${evalBar("F1", d.f1, fmtPct(d.f1))}
+    </div>
+    <p class="eval-meta">TP=${d.tp} FP=${d.fp} FN=${d.fn} TN=${d.tn}</p>`;
+  }
+  if (results.prediction) {
+    const p = results.prediction;
+    html += `<div class="eval-stats">
+      <div class="eval-stat"><span class="value">${fmtS(p.mae_lead_time_s)}</span><span class="label">errore medio previsione</span></div>
+      <div class="eval-stat"><span class="value">${p.scenarios ?? "-"}</span><span class="label">scenari testati</span></div>
+    </div>`;
+  }
+  if (results.tag) {
+    const t = results.tag;
+    html += `<div class="eval-bars">${evalBar("TAG accuracy", t.accuracy, `${t.correct ?? "-"}/${t.total ?? "-"}`)}</div>`;
+  }
+  return html || `<p class="hint">In attesa dei primi risultati...</p>`;
+}
+
+function renderEfficiencyResults(results) {
+  let html = "";
+  if (results.throughput) {
+    const th = results.throughput;
+    html += `<div class="eval-stats">
+      <div class="eval-stat"><span class="value">${th.breaking_point_msgs_s ? `${Math.round(th.breaking_point_msgs_s)}/s` : "non raggiunto"}</span><span class="label">punto di rottura</span></div>
       <div class="eval-stat"><span class="value">${th.max_achieved_msgs_s ? `${Math.round(th.max_achieved_msgs_s)}/s` : "-"}</span><span class="label">throughput massimo</span></div>
+    </div>`;
+  }
+  if (results.latency) {
+    const la = results.latency;
+    html += `<div class="eval-stats">
       <div class="eval-stat"><span class="value">${fmtS(la.avg_latency_s)}</span><span class="label">latenza media onset&rarr;alert</span></div>
       <div class="eval-stat"><span class="value">${la.successful ?? "-"}/${la.trials ?? "-"}</span><span class="label">prove riuscite</span></div>
     </div>`;
+  }
+  return html || `<p class="hint">In attesa dei primi risultati...</p>`;
 }
 
-function renderEvalCard(bodyId, runType, entry, statsRenderer) {
-  const body = document.getElementById(bodyId);
+const EVAL_RESULT_RENDERERS = { effectiveness: renderEffectivenessResults, efficiency: renderEfficiencyResults };
+
+function renderEvalCard(runType, entry) {
+  const body = document.getElementById(`eval-${runType}-body`);
   if (!entry) {
-    body.innerHTML = `<p class="hint">Nessun run ancora eseguito. Si lancia con:</p>
-      <div class="sql">docker exec shf-ros bash -c "cd /opt/shf/eval && python3 run_${runType}.py"</div>`;
+    body.innerHTML = `<p class="hint">Nessun run ancora eseguito.</p>`;
     return;
   }
-  const files = EVAL_FILES[runType];
-  const charts = files.charts
-    .map((f) => `<img src="/api/eval/files/${entry.run_id}/${f}" alt="${f}" loading="lazy" />`)
-    .join("");
-  const downloads = [...files.charts, ...files.csvs]
+  const downloads = EVAL_CSV_FILES[runType]
     .map((f) => `<a href="/api/eval/files/${entry.run_id}/${f}" download>${f}</a>`)
     .join("");
   body.innerHTML = `
     <p class="eval-meta">run <code>${entry.run_id}</code> &middot; ${new Date(entry.timestamp).toLocaleString("it-IT")}</p>
-    ${statsRenderer(entry.summary)}
-    <div class="eval-charts">${charts}</div>
+    ${EVAL_RESULT_RENDERERS[runType](entry.summary)}
     <div class="eval-downloads">${downloads}</div>`;
+}
+
+function renderEvalLive(runType, status) {
+  const body = document.getElementById(`eval-${runType}-body`);
+  const stageLabel = status.stage ? EVAL_STAGE_LABELS[runType][status.stage] : null;
+  const header = status.running
+    ? `<p class="eval-meta">run <code>${status.run_id}</code> in corso${stageLabel ? ` (${stageLabel}...)` : "..."}</p>`
+    : status.error
+      ? `<p class="hint">Errore: ${status.error}</p>`
+      : `<p class="eval-meta">run <code>${status.run_id}</code> completato.</p>`;
+  body.innerHTML = `${header}${EVAL_RESULT_RENDERERS[runType](status.results || {})}`;
+}
+
+function pollEvalRun(runType) {
+  if (evalPollTimers[runType]) clearInterval(evalPollTimers[runType]);
+  const tick = async () => {
+    try {
+      const res = await fetch("/api/eval/status");
+      const status = await res.json();
+      if (status.run_type !== runType) return; // e' in corso l'altro tipo, non tocca questo pannello
+      renderEvalLive(runType, status);
+      if (!status.running) {
+        clearInterval(evalPollTimers[runType]);
+        evalPollTimers[runType] = null;
+        document.getElementById(`eval-${runType}-run-btn`).disabled = false;
+      }
+    } catch {
+      // silenzioso, si riprova al prossimo giro
+    }
+  };
+  evalPollTimers[runType] = setInterval(tick, 1000);
+  tick();
+}
+
+async function startEvalRun(runType) {
+  const btn = document.getElementById(`eval-${runType}-run-btn`);
+  try {
+    btn.disabled = true;
+    const res = await fetch("/api/eval/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ run_type: runType }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    pollEvalRun(runType);
+  } catch (err) {
+    document.getElementById(`eval-${runType}-body`).innerHTML = `<p class="hint">Errore: ${err.message}</p>`;
+    btn.disabled = false;
+  }
+}
+
+function setupEvalButtons() {
+  document.getElementById("eval-effectiveness-run-btn").addEventListener("click", () => startEvalRun("effectiveness"));
+  document.getElementById("eval-efficiency-run-btn").addEventListener("click", () => startEvalRun("efficiency"));
 }
 
 async function refreshEvalResults() {
   try {
-    const res = await fetch("/api/eval/results");
-    const index = await res.json();
+    const [indexRes, statusRes] = await Promise.all([fetch("/api/eval/results"), fetch("/api/eval/status")]);
+    const index = await indexRes.json();
+    const status = await statusRes.json();
     const latestOfType = (type) => [...index].reverse().find((e) => e.run_type === type);
-    renderEvalCard("eval-effectiveness-body", "effectiveness", latestOfType("effectiveness"), renderEffectivenessStats);
-    renderEvalCard("eval-efficiency-body", "efficiency", latestOfType("efficiency"), renderEfficiencyStats);
+
+    for (const runType of ["effectiveness", "efficiency"]) {
+      if (status.running && status.run_type === runType) {
+        document.getElementById(`eval-${runType}-run-btn`).disabled = true;
+        if (!evalPollTimers[runType]) pollEvalRun(runType);
+      } else if (!evalPollTimers[runType]) {
+        renderEvalCard(runType, latestOfType(runType));
+      }
+    }
   } catch {
     // silenzioso: non e' critico per il resto della dashboard, si riprova al prossimo giro
   }
@@ -592,15 +775,20 @@ async function main() {
   connectWebSocket();
   setupTagForm();
   setupGeneratorForm();
+  setupRealFaultForm();
+  setupEvalButtons();
+  loadRealFleetConfig();
   refreshPredictions();
   refreshGenStatus();
   refreshEvalResults();
   renderFleetTable();
+  renderRealFleetPanel();
   setInterval(refreshPredictions, 5000);
   setInterval(refreshGenStatus, 2000);
   setInterval(renderFleetTable, 1000);
+  setInterval(renderRealFleetPanel, 1000);
   setInterval(updateMapBadge, 1000);
-  setInterval(refreshEvalResults, 30000);
+  setInterval(refreshEvalResults, 5000);
   requestAnimationFrame(render);
 }
 

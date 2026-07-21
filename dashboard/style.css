@@ -227,9 +227,20 @@ button:disabled { opacity: 0.6; cursor: wait; }
   align-items: stretch;
 }
 
-.fleet-table-card, .generator-card {
+.fleet-table-card, .generator-card, .real-fleet-card {
   flex: 1;
   min-width: 380px;
+}
+
+#real-fleet-status {
+  margin-bottom: 0.75rem;
+  width: 100%;
+}
+
+.real-return-btn {
+  padding: 0.2rem 0.5rem;
+  font-size: 0.75rem;
+  background: #1f3a4a;
 }
 
 .table-scroll {
@@ -343,19 +354,42 @@ button:disabled { opacity: 0.6; cursor: wait; }
   color: #7c8697;
 }
 
-.eval-charts {
+.eval-bars {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  margin-bottom: 0.75rem;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
 }
 
-.eval-charts img {
-  max-width: 100%;
-  width: 340px;
-  border-radius: 6px;
+.eval-bar {
+  display: grid;
+  grid-template-columns: 70px 1fr 60px;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+}
+
+.eval-bar-label {
+  color: #7c8697;
+}
+
+.eval-bar-track {
+  background: #0c1117;
   border: 1px solid #232c39;
-  background: white;
+  border-radius: 4px;
+  height: 10px;
+  overflow: hidden;
+}
+
+.eval-bar-fill {
+  height: 100%;
+  background: #2b6cb0;
+  transition: width 0.4s ease;
+}
+
+.eval-bar-value {
+  text-align: right;
+  font-weight: 600;
 }
 
 .eval-downloads {

@@ -7,6 +7,7 @@ import { WebSocketServer } from "ws";
 
 import evalRouter from "./routes/eval.js";
 import fleetRouter from "./routes/fleet.js";
+import fleetControlRouter from "./routes/fleetControl.js";
 import generatorRouter from "./routes/generator.js";
 import graphRouter from "./routes/graph.js";
 import predictionsRouter from "./routes/predictions.js";
@@ -29,6 +30,7 @@ app.use("/api/graph", graphRouter);
 app.use("/api/fleet", fleetRouter);
 app.use("/api/predictions", predictionsRouter);
 app.use("/api/generator", generatorRouter);
+app.use("/api/fleet-control", fleetControlRouter);
 app.use("/api/eval", evalRouter);
 app.use(express.static(path.join(__dirname, "..", "dashboard")));
 

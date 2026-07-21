@@ -3,15 +3,15 @@
 **Obiettivo (da PLAN.md):** `eval/` — efficiency (scalabilità throughput/latency vs carico, punto di rottura, latenza onset→alert) ed effectiveness (detection precision/recall/F1 vs `injected_faults`, accuratezza previsione + lead time, execution accuracy del TAG).
 **Deliverable atteso:** i numeri per il report.
 
-Ultimo passo del piano. Distinto da `test/` (Passo pre-13, suite pass/fail per verificare la correttezza — vedi `test/README.md`): qui si producono **numeri e grafici riusabili nella tesina**, non asserzioni vero/falso. Su richiesta esplicita dell'utente, i risultati sono anche visualizzati "in diretta" in un pannello dedicato in fondo alla dashboard (non nella vista principale, per non intralciarla), con grafici incorporati e download di CSV/PNG.
+Ultimo passo del piano. Distinto da `test/` (Passo pre-13, suite pass/fail per verificare la correttezza — vedi `test/README.md`): qui si producono **numeri riusabili nella tesina**, non asserzioni vero/falso. Su richiesta esplicita dell'utente, i risultati sono anche visualizzati in un pannello dedicato in fondo alla dashboard (non nella vista principale, per non intralciarla). Dal 2026-07-21 il pannello lancia i run **on-demand** e ne mostra i risultati **davvero in diretta**, sotto-esperimento per sotto-esperimento man mano che finiscono (vedi "Estensione: risultati live" più sotto) — la versione originale mostrava solo l'ultimo run già completato, con grafici PNG pre-generati e un refresh a polling ogni 30s.
 
 ## Cosa è stato costruito
 
-**`eval/common.py`** — helper condivisi (stesso stile di `test/conftest.py`: client Kafka, `query_sql`/`ask_tag` verso i servizi, controllo del generatore). In più: `new_run_dir(tipo)` crea una cartella `/data/eval/<tipo>_<timestamp>/` sul volume Docker condiviso `shf-data` (stesso volume di telemetria/Parquet — CLAUDE.md, storage su volume condiviso), `save_fig`/`new_fig` per i grafici (matplotlib, backend `Agg`: nessun display, solo file), `update_index(...)` che aggiorna un indice condiviso `/data/eval/index.json` letto dal backend.
+**`eval/common.py`** — helper condivisi (stesso stile di `test/conftest.py`: client Kafka, `query_sql`/`ask_tag` verso i servizi, controllo del generatore). In più: `new_run_dir(tipo)` crea una cartella `/data/eval/<tipo>_<timestamp>/` sul volume Docker condiviso `shf-data` (stesso volume di telemetria/Parquet — CLAUDE.md, storage su volume condiviso), `update_index(...)` che aggiorna un indice condiviso `/data/eval/index.json` letto dal backend, `json_safe(...)` che sanifica `NaN`/`Infinity` prima di scrivere JSON (vedi "Estensione: risultati live").
 
 **`eval/reference_questions.py`** — 22 domande di riferimento in linguaggio naturale con la relativa query SQL "di verità diretta" scritta a mano (stesso principio di `test/test_tag_accuracy.py`: la verità si ricalcola sugli stessi dati al momento della domanda, niente valori attesi fissi che scadrebbero appena lo storico cresce).
 
-**`eval/run_effectiveness.py`** — tre esperimenti, ciascuno scrive CSV + un grafico PNG:
+**`eval/run_effectiveness.py`** — tre esperimenti, ciascuno scrive CSV (dal 2026-07-21 niente più PNG, vedi sotto):
 1. **Detection**: 8 robot-token (generatore, Passo 12), 3 con un guasto `spike_corrente` noto, 5 senza. Confusion matrix su `anomalies` (type=salute) → precision/recall/F1.
 2. **Previsione**: 3 scenari di trend sintetico (motor_temp, motor_current, battery_pct) con pendenza nota, crossing calcolato analiticamente, confrontato con l'output di `predictive/forecast_failures.py` → errore assoluto sul lead time.
 3. **TAG**: le 22 domande di riferimento, confronto risposta-vs-verità con lo stesso confronto tollerante (per valore, non per fraseggio) di `test/test_tag_accuracy.py` → execution accuracy.
@@ -20,9 +20,21 @@ Ultimo passo del piano. Distinto da `test/` (Passo pre-13, suite pass/fail per v
 1. **Sweep di throughput**: generatore da 500 a 60000 msg/s target (50→6000 robot-token a 10Hz), throughput raggiunto per ciascun livello, punto di rottura (dove il raggiunto scende sotto l'80% del target).
 2. **Latenza onset→alert**: 5 prove di iniezione+rilevamento di un guasto, tempo dall'attivazione reale (`injected_faults.start_ts`) alla ricezione del primo alert.
 
-**Backend** (`backend/src/routes/eval.js`): `GET /api/eval/results` (legge `/data/eval/index.json`), `GET /api/eval/files/:runId/:filename` (serve CSV/PNG di un run specifico, con validazione anti-path-traversal sui nomi). Il volume `shf-data` è montato in sola lettura sul backend — gli script `eval/` (eseguiti nel container `ros`) sono gli unici a scriverci.
+**Backend** (`backend/src/routes/eval.js`): `POST /api/eval/run`, `GET /api/eval/status` (avvio/lettura live, vedi sotto), `GET /api/eval/results` (legge `/data/eval/index.json`), `GET /api/eval/files/:runId/:filename` (serve i CSV di un run specifico, con validazione anti-path-traversal sui nomi). Il volume `shf-data` è montato in sola lettura sul backend — gli script `eval/` (eseguiti nel container `ros`) sono gli unici a scriverci.
 
-**Dashboard**: due nuove card in fondo alla pagina ("Risultati sperimentazioni — effectiveness/efficiency"), sotto le card già esistenti del Passo 11/12 — non nella vista principale, come richiesto. Ogni card mostra: metadati del run più recente, alcune statistiche chiave come tile, i grafici incorporati, i link di download per tutti i CSV/PNG. Polling ogni 30s: appena un nuovo run `eval/` scrive `index.json`, il pannello lo mostra senza bisogno di ricaricare la pagina ("in diretta", come richiesto).
+**Dashboard**: due card in fondo alla pagina ("Risultati sperimentazioni — effectiveness/efficiency"), sotto le card già esistenti del Passo 11/12 — non nella vista principale, come richiesto. Ogni card ha un bottone "Esegui ora"; mentre un run è in corso mostra lo stadio attivo e i risultati via via disponibili come barre/statistiche; a run finito mostra anche i link di download dei CSV.
+
+## Estensione: risultati live (2026-07-21)
+
+Su richiesta esplicita dell'utente ("vorrei creare dei risultati lì per lì, visualizzandoli in diretta... elimina i risultati statici"): il pannello non legge più un `index.json` aggiornato ogni 30s con PNG pre-generati, lancia il run e ne segue l'avanzamento in tempo reale.
+
+- **`eval/eval_service.py`** (nuovo): servizio HTTP nel container `ros` (porta 5003, stesso pattern di `generator_service.py`/Passo 12 e `fleet_control_service.py`/Passo 14: `http.server` nativo, un nodo/processo persistente avviato da supervisord). `POST /run {run_type}` avvia in un thread la sequenza di sotto-esperimenti già definita in `run_effectiveness.py`/`run_efficiency.py` (le stesse funzioni, importate e richiamate direttamente — non un `subprocess`), pubblicando il risultato di ciascuno in uno stato condiviso non appena pronto; `GET /status` lo espone. Un solo run alla volta (secondo tentativo → `409`).
+- **`backend/src/services/evalService.js`** + due nuove route in `routes/eval.js` (`POST /run`, `GET /status`) fanno da proxy verso `eval_service.py`, stesso schema di `fleetControlService.js`.
+- **Dashboard**: bottone "Esegui ora" per tipo; mentre il run è attivo la card fa polling di `/api/eval/status` ogni secondo e mostra lo stadio corrente (`detection`/`prediction`/`tag` o `throughput`/`latency`) più i risultati già arrivati, disegnati come barre CSS (niente canvas/libreria di grafici: per percentuali 0-100% una barra HTML è sufficiente e resta nello stile "vanilla" del resto della dashboard). A run finito, il refresh periodico da `/results` subentra e aggiunge i link di download CSV.
+- **Grafici PNG rimossi** da `eval/common.py`/`run_effectiveness.py`/`run_efficiency.py` (tolta la dipendenza `matplotlib` da `ros/Dockerfile`): erano pensati anche per la tesina, ma un PDF non può ospitare contenuti "live" — se servono immagini per il documento si generano a parte, separatamente dalla dashboard.
+- **Bug trovato e corretto durante la verifica**: quando precision/F1 sono `NaN` (caso legittimo, capita quando TP+FP=0), `json.dumps` li scrive come token `NaN` — non è JSON valido, e sia `fetch().json()` nel browser sia `JSON.parse` in Node lanciano un'eccezione silenziosa (il codice del pannello la ingoiava per non essere critico per il resto della dashboard), bloccando il polling proprio nel momento in cui arriva il primo risultato. Fix: `json_safe(...)` in `common.py` converte ricorsivamente `NaN`/`Infinity` in `null` prima di ogni risposta HTTP o scrittura di `index.json` — usato sia da `eval_service.py` sia da `update_index`.
+- **Verificato in un vero browser** (Chromium headless via CDP): run `effectiveness` avviato dal bottone, i tre stadi compaiono in sequenza sul pannello nell'arco di ~75s (detection dopo ~35s, previsione dopo ~40s, TAG dopo il completamento di tutte le 22 domande); un secondo tentativo di avvio mentre un run è già in corso riceve correttamente `409`.
+- **Osservazione da non ignorare per la tesina**: in questo run di verifica la detection ha misurato **precision/recall a 0** (nessuno dei 3 robot con guasto noto è stato segnalato entro la finestra di raccolta), diverso dal precision=recall=F1=1.00 registrato nella verifica originale del Passo 13 (vedi sopra). Il codice di `run_detection_experiment` non è stato toccato in questa estensione: è verosimile che sia variabilità del timing (finestra di raccolta fissa vs latenza reale di detection, non misurata qui in parallelo) più che una regressione, ma non è stato accertato — da ri-verificare con un secondo run pulito prima di usare questi numeri nella tesina.
 
 ## Verifica
 
@@ -45,14 +57,16 @@ Il numero "~30s" di latenza onset→alert **non è la vera latenza minima** del 
 
 ## Stato
 
-- `eval/common.py`, `eval/reference_questions.py`, `eval/run_effectiveness.py`, `eval/run_efficiency.py` — nuovi.
-- `backend/src/routes/eval.js` — nuovo.
+- `eval/common.py`, `eval/reference_questions.py`, `eval/run_effectiveness.py`, `eval/run_efficiency.py` — nuovi (Passo 13), aggiornati (2026-07-21) per togliere i grafici PNG e aggiungere `json_safe`.
+- `eval/eval_service.py` — nuovo (2026-07-21): run on-demand + risultati live.
+- `backend/src/routes/eval.js`, `backend/src/services/evalService.js` — nuova route `/api/eval` (Passo 13) estesa con `POST /run`/`GET /status` (2026-07-21).
 - `backend/src/server.js` — nuova route `/api/eval`.
-- `dashboard/{index.html,style.css,app.js}` — pannello "Risultati sperimentazioni".
-- `docker-compose.yml` — `./eval` e volume `shf-data` montati nel container `ros` (scrittura), `shf-data:ro` nel backend (lettura).
-- `ros/Dockerfile` — aggiunto `matplotlib`.
+- `dashboard/{index.html,style.css,app.js}` — pannello "Risultati sperimentazioni", da polling passivo su PNG a run on-demand con barre live (2026-07-21).
+- `docker-compose.yml` — `./eval` e volume `shf-data` montati nel container `ros` (scrittura), `shf-data:ro` nel backend (lettura); porta `5003` (eval_service) e `EVAL_SERVICE_URL` (2026-07-21).
+- `ros/supervisord.conf` — programma `eval_service` (2026-07-21).
+- `ros/Dockerfile` — `matplotlib` aggiunto al Passo 13, rimosso il 2026-07-21 (nessuno script lo usa più).
 
-Comando per rilanciare gli esperimenti:
+Si può ancora lanciare uno script da riga di comando (produce solo CSV, non aggiorna la vista "live" se non tramite il refresh periodico da `index.json`):
 
 ```bash
 docker exec shf-ros supervisorctl stop sim_multi_robot   # libera CPU, opzionale ma consigliato
@@ -60,6 +74,8 @@ docker exec shf-ros bash -c "cd /opt/shf/eval && python3 run_effectiveness.py"
 docker exec shf-ros bash -c "cd /opt/shf/eval && python3 run_efficiency.py"
 docker exec shf-ros supervisorctl start sim_multi_robot
 ```
+
+Oppure, dalla dashboard: bottone "Esegui ora" nella card corrispondente (nessun `docker exec` necessario).
 
 ## Chiusura del piano
 

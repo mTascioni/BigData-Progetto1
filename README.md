@@ -2,7 +2,7 @@
 
 Progetto Big Data (corso Big Data, Roma Tre, 2026): ingestione continua di telemetria da una flotta di AGV (TurtleBot3 in ROS/Gazebo), detection real-time delle anomalie (salute + deadlock/livelock) con Spark Structured Streaming, previsione offline dei guasti, interrogazione in linguaggio naturale (text-to-SQL) e dashboard live.
 
-Dettagli completi: [`CLAUDE.md`](CLAUDE.md) (schema dati, stack, invarianti) e [`PLAN.md`](PLAN.md) (i 13 passi del piano, con link alla documentazione dettagliata di ciascuno in [`docs/passi/`](docs/passi/)).
+Dettagli completi: [`CLAUDE.md`](CLAUDE.md) (schema dati, stack, invarianti) e [`PLAN.md`](PLAN.md) (i 13 passi del piano, più un'estensione — Passo 14, flotta reale e self healing — con link alla documentazione dettagliata di ciascuno in [`docs/passi/`](docs/passi/)).
 
 ## Struttura del progetto
 

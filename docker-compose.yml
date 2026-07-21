@@ -63,6 +63,8 @@ services:
     environment:
       - QUERY_SERVICE_URL=http://spark-master:5000
       - GENERATOR_SERVICE_URL=http://ros:5001
+      - FLEET_CONTROL_SERVICE_URL=http://ros:5002
+      - EVAL_SERVICE_URL=http://ros:5003
       - KAFKA_BOOTSTRAP=kafka:9092
       - CONFIG_DIR=/workspace/config
       - EVAL_DIR=/data/eval
@@ -95,6 +97,8 @@ services:
       - "6080:6080" # noVNC (http://localhost:6080/vnc.html)
       - "11311:11311" # roscore
       - "5001:5001" # generator_service (pannello di controllo dashboard, Passo 11 estensione)
+      - "5002:5002" # fleet_control_service (guasti live + missioni sulla flotta reale, Passo 14)
+      - "5003:5003" # eval_service (run di valutazione sperimentale on-demand, Passo 13 estensione)
 
 volumes:
   spark-ivy-cache:

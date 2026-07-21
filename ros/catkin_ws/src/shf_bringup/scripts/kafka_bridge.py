@@ -17,6 +17,7 @@ import math
 import os
 import random
 import time
+import uuid
 
 import rospy
 import tf.transformations
@@ -25,6 +26,19 @@ from geometry_msgs.msg import Twist
 from move_base_msgs.msg import MoveBaseActionGoal, MoveBaseActionResult
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
+from std_msgs.msg import String
+
+# Parametri di default per un guasto iniettato dal vivo (Passo 14, dashboard
+# -> fleet_control_service.py -> qui) quando il chiamante specifica solo
+# fault_type/duration_s: stessi ordini di grandezza degli esempi di
+# fault_schedule in config/experiment.json, cosi' un guasto live si comporta
+# come uno "vero" senza dover esporre tutti i parametri nella UI.
+DEFAULT_LIVE_FAULT_PARAMS = {
+    "deriva_termica": {"ramp_rate_c_per_s": 0.5, "plateau_temp_c": 85.0, "ramp_duration_s": 100},
+    "spike_corrente": {"peak_a": 4.5, "rise_time_s": 5, "hold_duration_s": 55},
+    "batteria_collasso": {"drain_rate_multiplier": 8.0, "trigger_pct": 60.0},
+    "sensore_bloccato": {"frozen_channel": "min_obstacle_dist", "freeze_duration_s": 60},
+}
 
 
 def load_config(config_dir):
@@ -133,6 +147,28 @@ class FaultInjector:
             elif ftype == "sensore_bloccato":
                 message[p["frozen_channel"]] = self.active[fault_id]["frozen_value"]
 
+    def inject_live(self, fault_type, duration_s, params=None):
+        """Aggiunge un guasto allo schedule *a runtime* (Passo 14): stesso
+        dict-shape di una entry di fault_schedule letta da experiment.json,
+        quindi update_battery_multiplier()/apply_to_message() lo gestiscono
+        automaticamente al prossimo tick, senza nessuna logica speciale --
+        finisce nel topic `telemetry` reale come un guasto pre-schedulato,
+        non in un canale a parte."""
+        elapsed = self._elapsed()
+        fault_id = f"LIVE-{uuid.uuid4().hex[:8]}"
+        fault = {
+            "fault_id": fault_id,
+            "robot_id": self.robot_id,
+            "fault_type": fault_type,
+            "start_time_s": elapsed,
+            "end_time_s": elapsed + duration_s,
+            "params": params or DEFAULT_LIVE_FAULT_PARAMS[fault_type],
+        }
+        self.schedule[fault_id] = fault
+        rospy.loginfo("%s: guasto live '%s' (%s) programmato, durata %ss",
+                       self.robot_id, fault_id, fault_type, duration_s)
+        return fault_id
+
     def flush_active(self):
         """Chiude come `injected_faults` anche i guasti ancora attivi se il
         nodo si ferma prima della fine naturale del guasto (best-effort)."""
@@ -212,6 +248,22 @@ class KafkaBridge:
         rospy.Subscriber("scan", LaserScan, self._on_scan, queue_size=5)
         rospy.Subscriber("move_base/goal", MoveBaseActionGoal, self._on_goal, queue_size=5)
         rospy.Subscriber("move_base/result", MoveBaseActionResult, self._on_result, queue_size=5)
+        # Iniezione guasto dal vivo (Passo 14): fleet_control_service.py
+        # pubblica qui {"fault_type": "...", "duration_s": ..., "params": {...}?}.
+        rospy.Subscriber("~fault_inject", String, self._on_fault_inject, queue_size=5)
+
+    def _on_fault_inject(self, msg):
+        try:
+            payload = json.loads(msg.data)
+            fault_type = payload["fault_type"]
+            duration_s = float(payload["duration_s"])
+        except (ValueError, KeyError) as exc:
+            rospy.logerr("%s: comando fault_inject non valido (%s): %s", self.robot_id, exc, msg.data)
+            return
+        if fault_type not in DEFAULT_LIVE_FAULT_PARAMS:
+            rospy.logerr("%s: fault_type sconosciuto per iniezione live: %s", self.robot_id, fault_type)
+            return
+        self.fault_injector.inject_live(fault_type, duration_s, params=payload.get("params"))
 
     def _on_odom(self, msg):
         p = msg.pose.pose.position

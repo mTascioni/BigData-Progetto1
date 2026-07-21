@@ -1,6 +1,13 @@
+import fs from "node:fs";
+import path from "node:path";
+
 import { Kafka } from "kafkajs";
 
+import { onSaluteThresholdAnomaly } from "./anomalyStream.js";
+import { dispatchMission, sendToRepair } from "./fleetControlService.js";
+
 const KAFKA_BOOTSTRAP = process.env.KAFKA_BOOTSTRAP || "kafka:9092";
+const CONFIG_DIR = process.env.CONFIG_DIR || "/workspace/config";
 const STALE_AFTER_MS = 15000; // oltre questo senza un nuovo fleet_state, il robot e' rimosso
 const PRUNE_INTERVAL_MS = 5000;
 
@@ -46,6 +53,79 @@ export function pruneSynthetic() {
     }
   }
 }
+
+// Anello automatico di retroazione (Passo 14): un'anomalia di salute reale
+// su un robot reale manda il robot colpito in riparazione e dispaccia un
+// robot di riserva a prendere in carico la sua missione. "Riserva" = un
+// robot reale senza una voce in experiment.json tasks[] (convenzione: R4/R8
+// in scale=large, vedi sim_multi_robot.launch) *e* effettivamente attivo
+// ora (presente in `robots`) -- cosi' in scale=small (R5-R8 non spawnati)
+// non si prova mai a dispacciare una riserva che non esiste.
+let _experiment = null;
+function loadExperiment() {
+  if (!_experiment) {
+    _experiment = JSON.parse(fs.readFileSync(path.join(CONFIG_DIR, "experiment.json"), "utf-8"));
+  }
+  return _experiment;
+}
+function hasOwnMission(robotId) {
+  const taskRobotIds = new Set(loadExperiment().tasks.map((t) => t.robot_id));
+  return taskRobotIds.has(robotId);
+}
+
+const dispatchedReserves = new Set(); // riserve gia' usate: non si ridispaccia la stessa due volte (v1, non "tornano" riserva)
+
+function pickAvailableReserve() {
+  const experiment = loadExperiment();
+  const taskRobotIds = new Set(experiment.tasks.map((t) => t.robot_id));
+  const candidate = experiment.fleet.find(
+    (r) =>
+      REAL_ROBOT_ID_RE.test(r.robot_id) &&
+      !taskRobotIds.has(r.robot_id) &&
+      !dispatchedReserves.has(r.robot_id) &&
+      robots.has(r.robot_id)
+  );
+  return candidate ? candidate.robot_id : null;
+}
+
+const inRepair = new Set(); // robot_id real gia' inviati in riparazione (debounce: un guasto reale genera molti eventi mentre e' attivo)
+
+export function clearRepairFlag(robotId) {
+  inRepair.delete(robotId);
+}
+
+// Ascolta le anomalie di salute su SOGLIA FISSA (anomalyStream.js), non
+// fleet_state.health_anomaly: quel flag e' l'OR di soglie fisse E Isolation
+// Forest, che ha un tasso di falsi positivi statistico strutturale
+// (contamination) -- innocuo per un pallino sulla mappa, ma su una flotta
+// di 8 robot (scale=large) genera abbastanza spesso una riparazione spuria
+// da rendere la demo inaffidabile (verificato con dati reali: streak fino a
+// 17s consecutivi di if_anomaly=1 su un robot fermo vicino a una parete,
+// niente affatto raro/isolato). Le soglie fisse sono deterministiche: ogni
+// guasto di salute iniettato (Passo 6) le supera sempre per costruzione.
+async function onSaluteAnomaly(event) {
+  const robotId = event.robot_id;
+  if (!robotId || !REAL_ROBOT_ID_RE.test(robotId)) return;
+  if (inRepair.has(robotId)) return;
+  inRepair.add(robotId);
+
+  // una riserva ancora non dispacciata non ha una missione da "salvare":
+  // va comunque in riparazione se segnalata, ma non si cerca un sostituto
+  // per lei (non esiste in experiment.json tasks[] nulla da passare oltre).
+  const reserveId = hasOwnMission(robotId) ? pickAvailableReserve() : null;
+  if (reserveId) dispatchedReserves.add(reserveId);
+
+  const detail = reserveId ? `+ dispaccio riserva (${reserveId})` : "(nessuna riserva disponibile)";
+  console.log(`[fleetStateStore] anomalia di salute (soglia: ${event.threshold_reasons}) su ${robotId}: riparazione ${detail}`);
+  try {
+    await sendToRepair(robotId);
+    if (reserveId) await dispatchMission(reserveId, robotId);
+  } catch (err) {
+    console.error(`[fleetStateStore] anello di retroazione fallito per ${robotId}: ${err.message}`);
+  }
+}
+
+onSaluteThresholdAnomaly((event) => onSaluteAnomaly(event).catch(() => {}));
 
 // Un robot del generatore sintetico (Passo 12) che finisce un run, o un
 // robot ROS che sparisce, altrimenti resterebbe per sempre come "fantasma"

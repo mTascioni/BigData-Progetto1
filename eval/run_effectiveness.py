@@ -25,7 +25,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (  # noqa: E402
-    ask_tag, collect_messages, new_fig, new_run_dir, query_sql, save_fig,
+    ask_tag, collect_messages, new_run_dir, query_sql,
     start_consumer, start_generator, update_index, wait_generator_done,
 )
 from reference_questions import REFERENCE_QUESTIONS  # noqa: E402
@@ -84,15 +84,6 @@ def run_detection_experiment(run_dir):
         for k, v in [("precision", precision), ("recall", recall), ("f1", f1),
                      ("true_positive", tp), ("false_positive", fp), ("false_negative", fn), ("true_negative", tn)]:
             w.writerow([k, v])
-
-    fig, ax = new_fig()
-    metrics = {"precision": precision, "recall": recall, "f1": f1}
-    ax.bar(metrics.keys(), [0 if v != v else v for v in metrics.values()], color=["#4caf50", "#2b6cb0", "#ff9800"])
-    ax.set_ylim(0, 1.05)
-    ax.set_title(f"Detection salute — precision/recall/F1 (TP={tp} FP={fp} FN={fn} TN={tn})")
-    for i, (k, v) in enumerate(metrics.items()):
-        ax.text(i, (0 if v != v else v) + 0.03, "n/d" if v != v else f"{v:.2f}", ha="center")
-    save_fig(fig, os.path.join(run_dir, "detection_metrics.png"))
 
     print(f"  precision={precision:.2f} recall={recall:.2f} f1={f1:.2f} (TP={tp} FP={fp} FN={fn} TN={tn})")
     return {"precision": precision, "recall": recall, "f1": f1, "tp": tp, "fp": fp, "fn": fn, "tn": tn}
@@ -161,15 +152,6 @@ def run_prediction_experiment(run_dir):
         w.writeheader()
         w.writerows(rows)
 
-    fig, ax = new_fig()
-    channels = [r["channel"] for r in rows]
-    errors = [abs(r["error_s"]) if r["error_s"] is not None else 0 for r in rows]
-    colors = ["#4caf50" if r["error_s"] is not None else "#ff4d4f" for r in rows]
-    ax.bar(channels, errors, color=colors)
-    ax.set_ylabel("|errore| lead time (s)")
-    ax.set_title("Previsione — errore assoluto vs valore analitico noto")
-    save_fig(fig, os.path.join(run_dir, "prediction_error.png"))
-
     valid_errors = [abs(r["error_s"]) for r in rows if r["error_s"] is not None]
     mae = sum(valid_errors) / len(valid_errors) if valid_errors else None
     return {"mae_lead_time_s": mae, "scenarios": len(rows), "missing": sum(1 for r in rows if r["error_s"] is None)}
@@ -229,12 +211,6 @@ def run_tag_experiment(run_dir):
             w.writerow({k: r.get(k, "") for k in w.fieldnames})
 
     accuracy = correct_count / len(REFERENCE_QUESTIONS) if REFERENCE_QUESTIONS else 0.0
-    fig, ax = new_fig()
-    ax.bar(["corrette", "sbagliate"], [correct_count, len(REFERENCE_QUESTIONS) - correct_count],
-           color=["#4caf50", "#ff4d4f"])
-    ax.set_title(f"TAG execution accuracy: {accuracy:.0%} ({correct_count}/{len(REFERENCE_QUESTIONS)})")
-    save_fig(fig, os.path.join(run_dir, "tag_accuracy.png"))
-
     print(f"  accuracy: {correct_count}/{len(REFERENCE_QUESTIONS)} = {accuracy:.0%}")
     return {"accuracy": accuracy, "correct": correct_count, "total": len(REFERENCE_QUESTIONS)}
 

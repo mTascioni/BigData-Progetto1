@@ -79,6 +79,39 @@
       </div>
     </section>
 
+    <section class="card real-fleet-card">
+      <h2>Flotta reale — controllo</h2>
+      <p class="hint">Passo 14: guasti live sui robot ROS/Gazebo reali (finiscono nella telemetria vera, li trova il modello, non un canale a parte). Un'anomalia di salute rilevata manda automaticamente il robot in riparazione e dispaccia il robot di riserva sulla sua missione.</p>
+
+      <table id="real-fleet-status">
+        <thead><tr><th>Robot</th><th>Stato</th><th>Goal</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+
+      <form id="real-fault-form">
+        <div class="form-row">
+          <label>Robot
+            <select id="real-fault-robot"></select>
+          </label>
+          <label>Guasto
+            <select id="real-fault-type">
+              <option value="deriva_termica">deriva_termica (motor_temp)</option>
+              <option value="spike_corrente" selected>spike_corrente (motor_current)</option>
+              <option value="batteria_collasso">batteria_collasso (battery_pct)</option>
+              <option value="sensore_bloccato">sensore_bloccato (freeze)</option>
+            </select>
+          </label>
+          <label>Durata (s)
+            <input type="number" id="real-fault-duration" value="40" min="5" max="600" />
+          </label>
+        </div>
+        <div class="form-actions">
+          <button type="submit">Inietta guasto ora</button>
+        </div>
+      </form>
+      <div id="real-fleet-status-msg" class="hint"></div>
+    </section>
+
     <section class="card generator-card">
       <h2>Genera carico sintetico</h2>
       <p class="hint">Pannello di controllo del generatore del Passo 12: avvia robot-token su un grafo a scelta, con guasti opzionali. Solo per test/carico, non tocca la simulazione ROS/Gazebo reale.</p>
@@ -119,7 +152,10 @@
   <main class="eval-row">
     <section class="card eval-card" id="eval-effectiveness-card">
       <h2>Risultati sperimentazioni — effectiveness</h2>
-      <p class="hint">Ultimo run di <code>eval/run_effectiveness.py</code> (Passo 13): precision/recall della detection, accuratezza delle previsioni, execution accuracy del layer TAG. Aggiornato automaticamente ogni 30s.</p>
+      <p class="hint"><code>eval/run_effectiveness.py</code> (Passo 13): precision/recall della detection, accuratezza delle previsioni, execution accuracy del layer TAG. Si lancia on-demand: i risultati compaiono qui man mano che ogni sotto-esperimento finisce.</p>
+      <div class="form-actions">
+        <button type="button" id="eval-effectiveness-run-btn">Esegui ora</button>
+      </div>
       <div id="eval-effectiveness-body" class="eval-body">
         <p class="hint">Nessun run ancora eseguito.</p>
       </div>
@@ -127,7 +163,10 @@
 
     <section class="card eval-card" id="eval-efficiency-card">
       <h2>Risultati sperimentazioni — efficiency</h2>
-      <p class="hint">Ultimo run di <code>eval/run_efficiency.py</code> (Passo 13): throughput a carico crescente, latenza onset&rarr;alert.</p>
+      <p class="hint"><code>eval/run_efficiency.py</code> (Passo 13): throughput a carico crescente, latenza onset&rarr;alert. Si lancia on-demand: i risultati compaiono qui man mano che ogni sotto-esperimento finisce.</p>
+      <div class="form-actions">
+        <button type="button" id="eval-efficiency-run-btn">Esegui ora</button>
+      </div>
       <div id="eval-efficiency-body" class="eval-body">
         <p class="hint">Nessun run ancora eseguito.</p>
       </div>

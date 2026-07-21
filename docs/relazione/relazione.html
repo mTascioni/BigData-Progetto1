@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8" />
+<title>Self Healing Fleet — Relazione tecnica</title>
+<style>
+  @page { size: A4; margin: 22mm 18mm 22mm 18mm; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Georgia", "Times New Roman", serif;
+    color: #1a1a1a;
+    font-size: 11pt;
+    line-height: 1.5;
+    max-width: 100%;
+  }
+  h1, h2, h3, h4 {
+    font-family: "Helvetica Neue", Arial, sans-serif;
+    color: #10233f;
+    line-height: 1.25;
+  }
+  h1 { font-size: 22pt; margin-bottom: 4pt; }
+  h2 {
+    font-size: 15pt;
+    margin-top: 26pt;
+    padding-bottom: 4pt;
+    border-bottom: 2px solid #10233f;
+    page-break-before: always;
+  }
+  .cover h2, .toc + h2 { page-break-before: avoid; }
+  h3 { font-size: 12.5pt; margin-top: 16pt; color: #1c3a63; }
+  h4 { font-size: 11pt; margin-top: 12pt; color: #333; }
+  p { margin: 6pt 0; text-align: justify; }
+  code, pre, .mono {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 8.7pt;
+  }
+  code { background: #f0f1f4; padding: 1px 4px; border-radius: 3px; }
+  pre {
+    background: #131a26;
+    color: #d9e2f0;
+    padding: 10pt 12pt;
+    border-radius: 5px;
+    overflow-x: auto;
+    line-height: 1.45;
+    page-break-inside: avoid;
+  }
+  pre code { background: none; padding: 0; color: inherit; }
+  table { border-collapse: collapse; width: 100%; margin: 10pt 0; font-size: 9.6pt; page-break-inside: avoid; }
+  th, td { border: 1px solid #c7cdd8; padding: 4pt 7pt; text-align: left; vertical-align: top; }
+  th { background: #eef1f6; font-family: "Helvetica Neue", Arial, sans-serif; }
+  tr:nth-child(even) td { background: #f8f9fb; }
+  ul, ol { margin: 6pt 0; padding-left: 20pt; }
+  li { margin: 3pt 0; text-align: justify; }
+  .badge {
+    display: inline-block; font-family: "Helvetica Neue", Arial, sans-serif; font-size: 8pt;
+    background: #10233f; color: #fff; padding: 1.5pt 6pt; border-radius: 8px; margin-right: 4pt;
+  }
+  .note {
+    background: #fff8e6; border-left: 4px solid #d6a300; padding: 6pt 10pt; margin: 8pt 0; font-size: 10pt;
+  }
+  .caveat {
+    background: #fdecec; border-left: 4px solid #c0392b; padding: 6pt 10pt; margin: 8pt 0; font-size: 10pt;
+  }
+  .cover {
+    height: 235mm; display: flex; flex-direction: column; justify-content: center; align-items: flex-start;
+  }
+  .cover .kicker { font-family: "Helvetica Neue", Arial, sans-serif; letter-spacing: 2px; text-transform: uppercase; font-size: 10pt; color: #5c6b82; margin-bottom: 10pt; }
+  .cover h1 { font-size: 30pt; }
+  .cover .subtitle { font-size: 13pt; color: #3b4a63; margin-top: 4pt; font-family: "Helvetica Neue", Arial, sans-serif; }
+  .cover .meta { margin-top: 60pt; font-family: "Helvetica Neue", Arial, sans-serif; font-size: 10.5pt; color: #333; }
+  .cover .meta div { margin: 3pt 0; }
+  .toc { page-break-before: always; }
+  .toc ol { list-style: none; padding-left: 0; }
+  .toc ol > li { font-family: "Helvetica Neue", Arial, sans-serif; font-weight: 600; margin: 10pt 0 3pt; }
+  .toc ol ol { padding-left: 16pt; margin: 2pt 0; }
+  .toc ol ol li { font-weight: 400; font-size: 10pt; margin: 2pt 0; }
+
+  /* diagramma architetturale a blocchi (CSS, nessuna dipendenza esterna) */
+  .diagram { margin: 12pt 0; font-family: "Helvetica Neue", Arial, sans-serif; font-size: 8.6pt; page-break-inside: avoid; }
+  .layer {
+    border: 1.5px dashed #8a96ab; border-radius: 8px; padding: 8pt; margin: 6pt 0;
+  }
+  .layer-title { font-weight: 700; color: #10233f; font-size: 8.8pt; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6pt; }
+  .layer-speed { background: #eef6ff; border-color: #2b6cb0; }
+  .layer-batch { background: #f1f6ef; border-color: #4c8a3f; }
+  .layer-serving { background: #fdf3e9; border-color: #c07a1f; }
+  .row { display: flex; gap: 8pt; align-items: stretch; flex-wrap: wrap; }
+  .box {
+    border: 1px solid #10233f; border-radius: 6px; background: #fff; padding: 6pt 8pt; flex: 1;
+    min-width: 90pt; text-align: center;
+  }
+  .box b { display: block; font-size: 9pt; }
+  .box small { color: #5c6b82; }
+  .arrow-down { text-align: center; font-size: 13pt; color: #5c6b82; margin: 2pt 0; }
+  .arrow-right { font-size: 13pt; color: #5c6b82; padding: 0 4pt; align-self: center; }
+
+  .fig-caption { font-family: "Helvetica Neue", Arial, sans-serif; font-size: 8.5pt; color: #5c6b82; text-align: center; margin-top: 3pt; }
+  .req-table td:first-child { font-weight: 600; }
+  .footer-note { font-size: 8pt; color: #8a96ab; font-family: "Helvetica Neue", Arial, sans-serif; }
+</style>
+</head>
+<body>
+
+<section class="cover">
+  <div class="kicker">Corso di Big Data — Topic 7: IoT Stream Analytics</div>
+  <h1>Self Healing Fleet</h1>
+  <div class="subtitle">Ingestion continua, detection real-time e analisi predittiva offline<br/>su una flotta di AGV in un magazzino</div>
+  <div class="meta">
+    <div><b>Autore:</b> Marcello Tascioni</div>
+    <div><b>Data:</b> 21 luglio 2026</div>
+    <div><b>Repository:</b> self-healing-fleet</div>
+  </div>
+</section>
+
+<section class="toc">
+  <h2 style="border-bottom:none;">Indice</h2>
+  <ol>
+    <li>1. Obiettivi del progetto
+      <ol>
+        <li>1.1 Contesto e vincoli del corso</li>
+        <li>1.2 Obiettivi funzionali</li>
+        <li>1.3 Un progetto di Big Data, non di robotica</li>
+      </ol>
+    </li>
+    <li>2. Architettura e tecnologie utilizzate
+      <ol>
+        <li>2.1 Vista d'insieme: architettura lambda</li>
+        <li>2.2 Sorgente dati: ROS1 Noetic + Gazebo + TurtleBot3</li>
+        <li>2.3 Contratto dati: schema del messaggio di telemetria</li>
+        <li>2.4 Ingestion: Apache Kafka</li>
+        <li>2.5 Generatore sintetico per lo sweep di scalabilità</li>
+        <li>2.6 Speed layer: detection real-time in Spark Structured Streaming</li>
+        <li>2.7 Batch layer: persistenza e soglie adattive</li>
+        <li>2.8 Analisi predittiva offline (time series)</li>
+        <li>2.9 Serving layer: Spark SQL e sistema TAG con Hugging Face</li>
+        <li>2.10 Presentazione: backend Node.js e dashboard</li>
+        <li>2.11 Estensione: self healing sulla flotta reale</li>
+        <li>2.12 Orchestrazione e deployment</li>
+      </ol>
+    </li>
+    <li>3. Risultati
+      <ol>
+        <li>3.1 Effectiveness: precisione della detection, della previsione e del TAG</li>
+        <li>3.2 Efficiency: scalabilità e latenza</li>
+        <li>3.3 Verifica end-to-end sulla flotta reale</li>
+        <li>3.4 Copertura dei requisiti del corso</li>
+      </ol>
+    </li>
+    <li>4. Osservazioni conclusive
+      <ol>
+        <li>4.1 Lezioni tecniche</li>
+        <li>4.2 Limiti dichiarati</li>
+        <li>4.3 Sviluppi futuri</li>
+      </ol>
+    </li>
+  </ol>
+</section>
+
+<h2>1. Obiettivi del progetto</h2>
+
+<h3>1.1 Contesto e vincoli del corso</h3>
+<p>Il progetto è stato sviluppato per il corso di Big Data, in relazione al <b>Topic 7 — IoT Stream Analytics</b>. Il tema scelto è la gestione di una flotta di AGV (Automated Guided Vehicle) in un magazzino: i veicoli percorrono una mappa a grafo trasportando merci, inviando in continuo la propria telemetria (posizione, velocità, stato dei task, canali di salute del motore/batteria). Il sistema deve ingerire questo flusso continuo, rilevarne le anomalie in tempo reale, prevederne i guasti su base storica, e rispondere a interrogazioni in linguaggio naturale.</p>
+<p>Il vincolo di fondo, esplicitato fin dall'inizio nella documentazione di progetto, è che si tratta di <b>un progetto di Big Data, non di robotica</b>: il robot è unicamente la sorgente del flusso dati. Le tre "V" classiche sono tutte presenti nel disegno del sistema — <i>Volume</i> (il generatore sintetico permette di scalare da poche unità a migliaia di sorgenti simulate), <i>Velocity</i> (ingestion e detection in streaming, non batch), <i>Veracity</i> (dati fisicamente realistici, con rumore e vincoli reali imposti da un simulatore fisico, non generati "a tavolino") — a cui si aggiunge <i>Value</i>, dato dal layer di analisi predittiva che trasforma lo storico grezzo in previsioni azionabili.</p>
+
+<h3>1.2 Obiettivi funzionali</h3>
+<ol>
+  <li><b>Ingestion continua e realistica.</b> La sorgente dati doveva essere una vera pipeline ROS + Gazebo + TurtleBot3, non un generatore puramente sintetico fin dal principio — requisito esplicito del progetto per garantire dati con vincoli fisici reali (odometria, lidar, dinamica del robot), non solo formalmente conformi allo schema.</li>
+  <li><b>Detection in tempo reale</b> di due categorie di anomalie: anomalie di <i>salute</i> (derive termiche, picchi di corrente, collasso della batteria, sensori bloccati) e anomalie <i>comportamentali</i> (deadlock e livelock su corridoi a corsia singola).</li>
+  <li><b>Analisi predittiva offline</b> sullo storico dei canali di salute, per stimare <i>quando</i> un robot supererà una soglia critica (tempo di anticipo, o <i>lead time</i>), non solo <i>se</i> è già in anomalia.</li>
+  <li><b>Riduzione dei falsi positivi</b> tramite un meccanismo di soglie adattive, calibrate sullo storico reale usando i guasti iniettati come ground truth.</li>
+  <li><b>Interrogazione in linguaggio naturale</b> dello storico accumulato, tramite un layer text-to-SQL (TAG, Table-Augmented Generation) basato su un LLM open-source.</li>
+  <li><b>Quattro tecnologie obbligatorie</b>, tutte presenti almeno in versione minima: Apache Kafka, Spark Structured Streaming, un modello di previsione su serie storiche, un LLM.</li>
+  <li><b>Valutazione sperimentale</b> quantitativa, sia di <i>effectiveness</i> (precisione della detection e delle previsioni, accuratezza del TAG) sia di <i>efficiency</i> (scalabilità del throughput, latenza end-to-end), con un meccanismo di ground truth (`injected_faults`) che rende le metriche calcolabili in modo oggettivo, non stimato.</li>
+</ol>
+
+<h3>1.3 Un progetto di Big Data, non di robotica</h3>
+<p>Questo vincolo ha guidato diverse scelte architetturali documentate nel seguito: la navigazione dei robot non usa SLAM/mappa statica (irrilevante per gli obiettivi del progetto, il grafo del magazzino è già una roadmap nota); i canali di salute (temperatura motore, corrente, percentuale batteria) non esistono nel TurtleBot3 simulato e vengono <i>sintetizzati</i> nel nodo-ponte ROS→Kafka a partire da parametri nominali configurabili; l'iniezione dei guasti avviene sommando una firma parametrica alla telemetria realistica, non generando dati fittizi da zero. In un'estensione realizzata oltre il piano originale (§2.11), è stata anche introdotta un'unica, dichiarata eccezione a questo principio: per la sola flotta reale, un'anomalia di salute rilevata chiude l'anello con un'azione minima (invio verso un nodo di riparazione) — la decisione applicativa resta comunque nel backend, non nel robot.</p>
+
+<h2>2. Architettura e tecnologie utilizzate</h2>
+
+<h3>2.1 Vista d'insieme: architettura lambda</h3>
+<p>Il sistema è organizzato come una <b>architettura lambda</b>: gli stessi dati grezzi (il topic Kafka <code>telemetry</code>) alimentano sia un percorso <i>speed</i> a bassa latenza per la detection in tempo reale, sia un percorso <i>batch</i> più lento ma completo per l'analisi storica e predittiva. Un <i>serving layer</i> espone entrambi i risultati, sia alla dashboard live sia alle interrogazioni ad-hoc in linguaggio naturale.</p>
+
+<div class="diagram">
+  <div class="row">
+    <div class="box"><b>ROS + Gazebo</b><small>TurtleBot3 (×N)</small></div>
+    <div class="arrow-right">&rarr;</div>
+    <div class="box"><b>kafka_bridge.py</b><small>nodo-ponte rospy</small></div>
+    <div class="arrow-right">&rarr;</div>
+    <div class="box"><b>Apache Kafka</b><small>telemetry, injected_faults</small></div>
+  </div>
+  <div class="arrow-down">&darr;</div>
+  <div class="layer layer-speed">
+    <div class="layer-title">Speed layer — real-time</div>
+    <div class="row">
+      <div class="box"><b>detection_job.py</b><small>Spark Structured Streaming</small></div>
+      <div class="arrow-right">&rarr;</div>
+      <div class="box"><b>fleet_state</b><small>topic Kafka, stato live</small></div>
+      <div class="arrow-right">&rarr;</div>
+      <div class="box"><b>anomalies</b><small>topic Kafka</small></div>
+    </div>
+  </div>
+  <div class="layer layer-batch">
+    <div class="layer-title">Batch layer — offline</div>
+    <div class="row">
+      <div class="box"><b>persistence_job.py</b><small>Spark Structured Streaming</small></div>
+      <div class="arrow-right">&rarr;</div>
+      <div class="box"><b>Parquet</b><small>telemetry, anomalies,<br/>injected_faults</small></div>
+    </div>
+    <div class="arrow-down">&darr;</div>
+    <div class="row">
+      <div class="box"><b>adaptive_thresholds.py</b><small>feedback soglie &rarr; speed layer</small></div>
+      <div class="arrow-right">&rarr;</div>
+      <div class="box"><b>forecast_failures.py</b><small>regressione lineare &rarr; predictions</small></div>
+    </div>
+  </div>
+  <div class="layer layer-serving">
+    <div class="layer-title">Serving layer</div>
+    <div class="row">
+      <div class="box"><b>query_service.py</b><small>Spark SQL persistente</small></div>
+      <div class="arrow-right">&harr;</div>
+      <div class="box"><b>backend Node</b><small>/api/tag, /api/fleet, ws</small></div>
+      <div class="arrow-right">&harr;</div>
+      <div class="box"><b>Qwen2.5-Coder-32B</b><small>router Hugging Face</small></div>
+    </div>
+  </div>
+  <div class="arrow-down">&darr;</div>
+  <div class="box" style="max-width:260pt;"><b>Dashboard</b><small>HTML + canvas 2D + JS, websocket</small></div>
+  <div class="fig-caption">Fig. 1 — Architettura lambda del sistema: gli stessi dati grezzi alimentano il percorso real-time (speed layer) e quello storico (batch layer); il serving layer li espone entrambi alla dashboard e alle interrogazioni in linguaggio naturale.</div>
+</div>
+
+<h3>2.2 Sorgente dati: ROS1 Noetic + Gazebo + TurtleBot3</h3>
+<p>La sorgente dati è una simulazione fisica, non un generatore di numeri casuali conforme a uno schema. Ogni robot è un TurtleBot3 "burger" simulato in Gazebo, controllato tramite lo stack di navigazione ROS standard (<code>move_base</code> con pianificatore locale DWA). La navigazione <b>non usa SLAM né una mappa statica/AMCL</b>: il costmap globale vive nel frame <code>odom</code> (60×40 m, nessun <code>static_layer</code>) — scelta deliberata, perché il grafo del magazino (§2.3) è già una roadmap nota a priori, e introdurre SLAM avrebbe aggiunto complessità robotica irrilevante per gli obiettivi di Big Data del progetto. Ogni robot riceve in sequenza i nodi del proprio percorso come goal <code>actionlib</code>.</p>
+
+<h4>Multi-robot e scenari di conflitto</h4>
+<p>TurtleBot3 non supporta nativamente il multi-robot: è stato necessario uno script (<code>gen_robot_description.sh</code>) che inietta il namespace nei plugin Gazebo e rinomina esplicitamente i frame TF (a differenza dei topic, <code>tf2</code> non prefissa automaticamente i <code>frame_id</code> in base al namespace di lancio). La flotta di riferimento comprende 3 robot attivi (R1-R3) più un quarto robot di riserva (R4, §2.11); uno scenario esteso ("large") raddoppia la flotta attiva a 6 robot con due riserve (R4, R8), selezionabile con un parametro <code>scale</code> del file di lancio ROS.</p>
+
+<h4>Sintesi dei canali di salute e fault injection</h4>
+<p>Il nodo-ponte <code>kafka_bridge.py</code> sottoscrive <code>/odom</code>, <code>/cmd_vel</code>, <code>/scan</code>, <code>/move_base/goal</code>, <code>/move_base/result</code>. I tre canali di salute (<code>battery_pct</code>, <code>motor_current</code>, <code>motor_temp</code>) — assenti dal TurtleBot3 simulato — vengono sintetizzati a partire da parametri nominali condivisi (<code>health_channels_nominal</code> in <code>config/experiment.json</code>): la batteria si scarica in funzione dello stato di moto/idle e si ricarica in "charging", corrente e temperatura oscillano attorno a un valore nominale con rumore gaussiano. La posizione sull'arco corrente del grafo (<code>current_edge</code>) è calcolata proiettando <code>(x, y)</code> reali sul grafo.</p>
+<p>L'iniezione dei guasti è realizzata da una classe <code>FaultInjector</code> che legge un <code>fault_schedule</code> (§2.3) e <b>somma una firma parametrica alla telemetria realistica prima della pubblicazione</b>, non genera un canale separato: un guasto iniettato attraversa esattamente lo stesso percorso dati di un guasto "vero". Le firme implementate sono quattro, tutte parametriche:</p>
+<table>
+  <tr><th>Firma</th><th>Canale</th><th>Meccanismo</th></tr>
+  <tr><td><code>deriva_termica</code></td><td><code>motor_temp</code></td><td>rampa lineare fino a un plateau</td></tr>
+  <tr><td><code>spike_corrente</code></td><td><code>motor_current</code></td><td>picco che resta elevato per la durata del guasto</td></tr>
+  <tr><td><code>batteria_collasso</code></td><td><code>battery_pct</code></td><td>discesa più ripida del drain rate nominale</td></tr>
+  <tr><td><code>sensore_bloccato</code></td><td>configurabile</td><td>valore congelato all'ultimo campione valido</td></tr>
+</table>
+<p>A queste si affiancano due <b>scenari comportamentali</b> (deadlock, livelock), realizzati non come firme sui dati ma come vera e propria contesa di traffico: il grafo del magazzino include due archi a corsia singola (<code>capacity=1</code>, C-F e C-H). In un'estensione realizzata dopo il completamento del piano originale (§2.11), questi due archi sono stati fisicamente ristretti anche in Gazebo (pareti statiche SDF, corridoio libero di 0.8 m), così che i conflitti di traffico siano osservabili come vincoli fisici reali e non solo come un numero nel file di configurazione.</p>
+
+<h3>2.3 Contratto dati: schema del messaggio di telemetria</h3>
+<p>Lo schema del messaggio di telemetria è la fonte di verità unica dell'intero progetto: ogni componente (ponte ROS, generatore sintetico, job Spark, storage, layer TAG) si conforma ad esso. Un tick per robot, pubblicato in formato JSON sul topic Kafka <code>telemetry</code>:</p>
+<pre><code>{
+  "ts": 1721400000000,
+  "robot_id": "R3",
+  "x": 12.4, "y": 3.1, "theta": 1.57,
+  "v_lin": 0.22, "v_ang": 0.0,
+  "cmd_v_lin": 0.25, "cmd_v_ang": 0.0,
+  "battery_pct": 74.0, "motor_current": 1.8, "motor_temp": 41.5,
+  "min_obstacle_dist": 0.9,
+  "task_state": "moving",
+  "current_edge": "C-F",
+  "goal_node": "H"
+}</code></pre>
+<p><code>task_state</code> assume uno fra <code>idle</code>, <code>moving</code>, <code>blocked</code>, <code>charging</code> — il valore <code>blocked</code> richiede che <i>sia</i> la velocità lineare <i>sia</i> quella angolare restino sotto una soglia epsilon per oltre 5 secondi con un goal attivo (una rotazione pura di recovery, tipica di <code>move_base</code>, resta quindi classificata <code>moving</code>, non <code>blocked</code> — un dettaglio rilevante per il rilevatore di livelock, §2.6). Posa, velocità e <code>min_obstacle_dist</code> provengono da Gazebo (odometria e lidar reali); i canali di salute sono sintetizzati come descritto sopra.</p>
+<p>La mappa del magazzino (<code>config/warehouse_graph.json</code>) è un grafo con nodi (id, coordinate, tipo) e archi (id, estremi, capacità, lunghezza); i robot la seguono come roadmap, e la posizione viene mappata sull'arco occupato. Un secondo file, <code>config/experiment.json</code>, definisce la flotta, i percorsi (<code>goal_sequence</code> per robot), gli scenari di conflitto e il <code>fault_schedule</code> — quest'ultimo è anche, letteralmente, la <b>ground truth</b> usata per calcolare precision/recall nella valutazione sperimentale (§3).</p>
+
+<h3>2.4 Ingestion: Apache Kafka</h3>
+<p>Un singolo broker Kafka in modalità KRaft (senza Zookeeper, <code>apache/kafka:3.7.0</code>) fa da spina dorsale dell'ingestion. Quattro topic principali:</p>
+<ul>
+  <li><code>telemetry</code> — un messaggio per tick per robot, partizionato per <code>robot_id</code> (3 partizioni): garantisce l'ordinamento per singolo robot mantenendo il parallelismo fra robot diversi.</li>
+  <li><code>injected_faults</code> — un record per ogni guasto iniettato (inizio/fine reali, parametri) — la ground truth sperimentale.</li>
+  <li><code>anomalies</code> — un evento per ogni anomalia rilevata dal job di detection (salute, deadlock, livelock).</li>
+  <li><code>fleet_state</code> — lo stato arricchito di ciascun robot ad ogni tick (telemetria + flag di anomalia), consumato in tempo reale dalla dashboard.</li>
+</ul>
+
+<h3>2.5 Generatore sintetico per lo sweep di scalabilità</h3>
+<p>Gazebo non arriva a volumi di decine di migliaia di messaggi al secondo (il collo di bottiglia è la simulazione fisica, non Kafka/Spark). Per gli esperimenti di scalabilità (§3.2) è stato costruito un generatore puro Python (<code>generator/synthetic_generator.py</code>, nessuna dipendenza da ROS) che produce robot-token: percorrono lo stesso grafo del magazzino arco per arco a velocità costante, scegliendo il prossimo nodo <b>a caso</b> fra i vicini (nessuna sequenza predisposta, a differenza dei robot ROS), e pubblicano messaggi che rispettano <i>esattamente</i> lo stesso schema di <code>kafka_bridge.py</code>. Il carico è controllato da due parametri indipendenti (numero di robot-token × frequenza per robot); una coda a priorità (<code>heapq</code>) permette di scalare la schedulazione a migliaia di sorgenti in un solo processo. Il generatore supporta anche l'iniezione di guasti con lo stesso formato e la stessa logica di applicazione di <code>kafka_bridge.py</code>, così le metriche di precision/recall si calcolano nello stesso modo sia sui dati reali sia su quelli sintetici.</p>
+
+<h3>2.6 Speed layer: detection real-time in Spark Structured Streaming</h3>
+<p>Il cuore del sistema di detection è <code>streaming/detection_job.py</code>: tre query Structured Streaming indipendenti sulla stessa sorgente Kafka (<code>telemetry</code>), ciascuna con il proprio sink e il proprio checkpoint — separarle, invece di una query monolitica, mantiene semplice una logica che ha semantiche di trigger radicalmente diverse (per-messaggio contro aggregazioni a finestra con chiavi diverse).</p>
+
+<h4>Detection di salute</h4>
+<p>Trigger a 2 secondi, per ogni messaggio: due tecniche complementari applicate in parallelo.</p>
+<ul>
+  <li><b>Soglie statiche</b>: <code>motor_temp &gt; 55°C</code>, <code>motor_current &gt; 2.5A</code>, <code>battery_pct &lt; 20%</code> — deterministiche, calibrabili offline (soglie adattive, §2.7).</li>
+  <li><b>Isolation Forest</b> (scikit-learn), applicato via <code>pandas_udf</code> sul vettore <code>(motor_temp, motor_current, battery_pct, v_lin, min_obstacle_dist)</code>. Allenato <i>offline</i> su un campione sintetico di telemetria nominale generato dagli stessi parametri di <code>config/experiment.json</code> (coerenza fra chi genera i dati nominali e chi allena il modello), non online sui dati che sta giudicando — un modello che si auto-allena sui dati che valuta rischierebbe di "abituarsi" ai guasti stessi. Il campionamento sintetico modella esplicitamente la correlazione fra stato di moto e prossimità agli ostacoli (un robot fermo resta "parcheggiato" e la sua distanza da un ostacolo è uno stato stabile per l'intera sosta, non un evento raro — dettaglio emerso e corretto durante l'estensione Passo 14, §2.11).</li>
+</ul>
+<p>Ogni messaggio arricchito viene scritto su <code>fleet_state</code> (stato live per la dashboard); se una delle due tecniche segnala un'anomalia, viene scritto anche su <code>anomalies</code> con <code>type="salute"</code> e l'elenco delle ragioni (<code>threshold_reasons</code>, eventualmente vuoto se solo l'Isolation Forest ha reagito). Verificato empiricamente che le due tecniche sono complementari, non ridondanti: in un test mirato una soglia su <code>motor_temp</code> scattava mentre l'Isolation Forest restava silenzioso (temperatura isolata alta, ma il resto del vettore "sembrava" nominale), e il pattern si è parzialmente invertito su uno spike di corrente.</p>
+
+<h4>Rilevamento del deadlock</h4>
+<p>Finestra scorrevole di 20 secondi (slide 10s) per <code>current_edge</code>: se nella finestra compaiono almeno due robot distinti con <code>task_state="blocked"</code> sullo stesso arco, viene emessa un'anomalia <code>type="deadlock"</code>.</p>
+
+<h4>Rilevamento del livelock: un caso di studio sulla semantica dello streaming</h4>
+<p>Il rilevatore di livelock ha attraversato tre iterazioni successive, ciascuna motivata da un falso positivo reale osservato in dashboard, non da un'analisi teorica preventiva — un esempio istruttivo di quanto le semantiche di windowing di Structured Streaming siano insidiose:</p>
+<ol>
+  <li><b>Versione iniziale</b>: finestra scorrevole di 30s, anomalia se la distanza-sul-grafo dal <code>goal_node</code> non cala. La distanza era però agganciata al <i>nodo più vicino</i>, non calcolata in modo continuo lungo l'arco: per circa metà del tempo di attraversamento di un arco lungo (fino a 75s a velocità di crociera), la distanza restava perfettamente costante anche con moto reale continuo, generando decine di falsi positivi. <b>Fix</b>: distanza calcolata proiettando <code>(x,y)</code> sull'arco corrente e sommando la distanza-sul-grafo (precalcolata con Floyd-Warshall su tutto il grafo, distribuita via <code>broadcast</code>) dal punto proiettato al goal.</li>
+  <li><b>Secondo bug, indipendente</b>, trovato dalla suite di test: le query usavano <code>outputMode("update")</code>, che riemette una riga ogni volta che l'aggregato di una finestra <i>cambia</i>, anche quando la finestra è ancora aperta e parzialmente popolata — un robot osservato nei primi secondi di una nuova finestra (pochi messaggi, poco spostamento visibile <i>finora</i>) poteva soddisfare "nessun progresso" su un campione incompleto. <b>Fix</b>: <code>outputMode("append")</code>, che emette solo dopo che il watermark ha chiuso la finestra per intero (costo: più latenza, fino a un'altra finestra completa).</li>
+  <li><b>Terzo bug</b>: anche con una finestra chiusa per intero, il rilevatore restava una valutazione <i>a scatto singolo</i> su 30 secondi — un breve accodamento durante un sorpasso su un corridoio a corsia singola rientra facilmente in una finestra con poco progresso netto, pur essendo un evento normale che si risolve da solo. Un primo tentativo di fix (due aggregazioni a finestra incatenate, per richiedere almeno due finestre candidate consecutive) si è rivelato rompersi su un limite noto di Spark: il watermark del secondo stadio restava bloccato all'epoch nonostante dati reali in arrivo. <b>Fix definitivo</b>: stato esplicito per <code>robot_id</code> via <code>applyInPandasWithState</code> — un "checkpoint" di riferimento (distanza, istante) aggiornato ogni 10s di event time; se il progresso fra un checkpoint e il successivo è sotto soglia si accumula un contatore di stallo continuo, altrimenti si azzera; l'anomalia scatta solo dopo 60 secondi <i>consecutivi</i> di stallo. Questa versione implementa correttamente la definizione di "livelock" come condizione <i>prolungata</i>, non un singolo campionamento sfortunato.</li>
+</ol>
+<p>Il rilevatore finale è quindi un vero operatore stateful per chiave, non un'aggregazione a finestra — più pesante computazionalmente (una chiamata Python per robot per micro-batch), ma l'unico che modella correttamente la semantica richiesta.</p>
+
+<h4>Infrastruttura Spark</h4>
+<p>Cluster Spark standalone (master + worker, immagine Docker custom con <code>pandas</code>/<code>numpy</code>/<code>pyarrow</code>/<code>scikit-learn</code> aggiunti sopra l'immagine base). Il connettore Kafka (<code>spark-sql-kafka-0-10</code>) è risolto a runtime via Maven (<code>--packages</code>), con cache Ivy su un volume Docker dedicato. Lo scheduler FIFO di Spark standalone assegna per default tutti i core al primo job avviato: con più job persistenti (detection, query_service, §2.9) è stato necessario fissare esplicitamente <code>spark.cores.max</code> per ciascuno.</p>
+
+<h3>2.7 Batch layer: persistenza e soglie adattive</h3>
+<p><code>streaming/persistence_job.py</code> — tre query Structured Streaming indipendenti (stesso pattern del job di detection) che leggono <code>telemetry</code>, <code>anomalies</code>, <code>injected_faults</code> con <code>startingOffsets=earliest</code> (a differenza del job di detection, che legge solo <code>latest</code>: qui lo scopo è costruire l'archivio storico completo) e li scrivono su <b>Parquet</b>, su un volume Docker condiviso montato in sola lettura dal backend. <code>anomalies</code> è partizionato per <code>type</code>, dato che le query a valle (TAG, valutazione sperimentale) filtrano quasi sempre per tipo.</p>
+<p><code>offline/adaptive_thresholds.py</code> chiude un anello di feedback verso la detection: usa <code>injected_faults</code> come <b>ground truth</b> per classificare ogni anomalia di salute storica come vero o falso positivo, e per i canali con un numero minimo di falsi positivi ricalcola la soglia come il 99.5° percentile (0.5° per la batteria) dei valori osservati nei periodi <i>nominali</i> (fuori da ogni finestra di guasto reale) — non un numero scelto a mano, ma calibrato sul rumore nominale realmente osservato. Il job di detection legge queste soglie ricalibrate all'avvio (non un hot-reload a caldo su una query già in esecuzione: il feedback avviene fra una run e la successiva).</p>
+
+<h3>2.8 Analisi predittiva offline (time series)</h3>
+<p><code>predictive/forecast_failures.py</code> stima, per ogni coppia (robot, canale di salute), <i>quando</i> il valore supererà la soglia critica del guasto corrispondente — non solo se è già in anomalia, ma con quanto anticipo (<i>remaining useful life</i>). La pipeline, in batch su pandas (nessun overhead di una <code>SparkSession</code> per questo volume di dati):</p>
+<ol>
+  <li>Ricampiona a bin di 5s la finestra recente di storico (default: ultimi 300s).</li>
+  <li><b>Pre-filtro sulla pendenza</b>: se la variazione per minuto è sotto una soglia minima calibrata sul rumore nominale, si ferma qui — evita fit spurii e falsi allarmi su rumore che imita per caso un trend.</li>
+  <li>Solo in presenza di un trend vero, allena una <b>regressione lineare ai minimi quadrati</b> (<code>numpy.polyfit</code>, grado 1) e calcola <i>analiticamente</i> l'istante di incrocio con la soglia critica (<code>t = (soglia − intercetta) / pendenza</code>) — nessun bisogno di generare un forecast punto-per-punto.</li>
+  <li>Le soglie critiche coincidono deliberatamente con i valori-obiettivo delle firme di guasto (§2.2): 85°C è il <code>plateau_temp_c</code> di <code>deriva_termica</code>, 4.5A è il <code>peak_a</code> di <code>spike_corrente</code>.</li>
+</ol>
+<p>La scelta della tecnica è stata rivista in corso d'opera: la prima versione usava <b>ARIMA</b> (statsmodels), come indicato dal piano originale. Un problema concreto (il default <code>trend='n'</code> di <code>ARIMA(p,1,0)</code> fa convergere il forecast a un livello asintotico costante invece di continuare a estrapolare una rampa) e la constatazione che il segnale è quasi lineare per costruzione (le firme di guasto sono rampe lineari verso un plateau) hanno motivato il passaggio a una regressione lineare — tecnica più semplice, più facile da verificare, con risultati praticamente identici ad ARIMA sullo stesso segnale reale (130.5s contro 130.0s di lead time misurato).</p>
+
+<h3>2.9 Serving layer: Spark SQL e sistema TAG con Hugging Face</h3>
+<p>Il quarto e ultimo requisito tecnologico obbligatorio — un LLM — è implementato come layer <b>TAG (Table-Augmented Generation)</b>: l'utente pone una domanda in linguaggio naturale, il sistema la traduce in SQL, la esegue sui dati storici Parquet, e restituisce il risultato.</p>
+
+<h4>Esecuzione SQL: Spark SQL, non un motore embedded</h4>
+<p>Il piano originale prevedeva DuckDB (libreria Node embeddable). È stata preferita una soluzione che riusa il cluster Spark già in piedi per la detection e la persistenza: <code>streaming/query_service.py</code>, un processo Spark <b>persistente</b> con un server HTTP nativo (<code>http.server</code>, nessuna dipendenza aggiuntiva per due sole route) che ricrea le temp view sulle quattro cartelle Parquet ad ogni richiesta (economico: è solo discovery dello schema, non un'azione, quindi vede sempre i dati più recenti scritti dal batch layer) ed esegue la query con un <code>LIMIT</code> di sicurezza. Evitare <code>spark-submit</code> per ogni domanda risparmia i circa 10 secondi di avvio JVM per query, inaccettabili per un endpoint interattivo.</p>
+
+<h4>Generazione SQL: Qwen2.5-Coder-32B via router Hugging Face</h4>
+<p>Il modello — <code>Qwen/Qwen2.5-Coder-32B-Instruct</code> — non è ospitato in locale: viene chiamato tramite il router <b>Inference Providers</b> di Hugging Face (<code>https://router.huggingface.co/v1/chat/completions</code>, API compatibile OpenAI, autenticazione Bearer). Questa scelta evita di dover gestire GPU/quantizzazione/<code>nvidia-container-toolkit</code> nel container per un modello da 32 miliardi di parametri, mantenendo comunque un LLM realmente open-source (non un servizio proprietario chiuso).</p>
+
+<h4>Pipeline dell'endpoint <code>POST /api/tag</code></h4>
+<p>Backend Node.js, quattro moduli con responsabilità separate:</p>
+<ul>
+  <li><b><code>promptBuilder.js</code></b> — costruisce il prompt: schema completo delle quattro tabelle Parquet (con le peculiarità del dialetto Spark SQL rilevanti: accesso a STRUCT con dot notation, <code>array_contains</code> per campi ARRAY, <code>timestamp_millis</code> per i timestamp epoch), 5 esempi few-shot, regole esplicite (solo <code>SELECT</code>, nessuna spiegazione testuale, <code>LIMIT</code> ragionevole se non specificato dalla domanda).</li>
+  <li><b><code>LlmService.js</code></b> — client verso il router Hugging Face.</li>
+  <li><b><code>sqlGuard.js</code></b> — <i>difesa in profondità</i>: ripulisce eventuali blocchi markdown residui e valida che la query generata sia una singola <code>SELECT</code>/<code>WITH</code>, priva di parole chiave di scrittura (con controllo a confini di parola, per non bloccare per errore identificatori come <code>created_at</code> a causa della sottostringa "creat"), <b>sia lato Node sia lato <code>query_service.py</code></b> — due controlli indipendenti sullo stesso vincolo.</li>
+  <li><b><code>tagService.js</code></b> — orchestra prompt → LLM → guardia → esecuzione, con <b>un retry</b> automatico (ri-prompting il modello con l'errore ricevuto) se la guardia rifiuta la query o l'esecuzione fallisce.</li>
+</ul>
+<p>Verificato che il modello generalizza oltre gli esempi few-shot forniti: nessuno dei 5 esempi nel prompt usa una <code>JOIN</code> o più di una CTE, eppure il sistema ha generato correttamente una query con CTE e <code>JOIN</code> per una domanda che lo richiedeva (§3.1).</p>
+
+<h3>2.10 Presentazione: backend Node.js e dashboard</h3>
+<p>Il backend (Node.js/Express) consuma <code>fleet_state</code> da Kafka (client <code>kafkajs</code>) e fa push via WebSocket ai client connessi; espone inoltre le route REST per il layer TAG, le previsioni, il controllo del generatore sintetico, il controllo della flotta reale e i risultati sperimentali. La dashboard (HTML + canvas 2D, JavaScript puro, nessun framework) disegna la mappa del magazzino, i robot colorati per stato con un anello di segnalazione per le anomalie, gli archi a capacità singola tratteggiati. Per un'animazione fluida nonostante il micro-batch di detection arrivi al massimo ogni 2 secondi, il client applica <i>dead reckoning</i>: estrapola la posizione ad ogni frame usando la velocità nota dall'ultimo messaggio, invece di attendere il prossimo pacchetto.</p>
+<p>Fra i pannelli disponibili: stato di tutti i robot (reali e sintetici) in tabella, log degli eventi comportamentali (deadlock/livelock) in tempo reale, pannello previsioni (dal layer predittivo), casella di interrogazione in linguaggio naturale, pannello di controllo per avviare/fermare il generatore sintetico scegliendo topologia e guasti, e — nell'estensione più recente — un pannello che lancia gli esperimenti di valutazione sperimentale <i>on demand</i> mostrandone i risultati mano a mano che ciascun sotto-esperimento termina, invece di un refresh periodico su grafici pre-generati.</p>
+
+<h3>2.11 Estensione: self healing sulla flotta reale</h3>
+<p>Oltre ai 13 passi del piano originale, su richiesta esplicita per una dimostrazione dal vivo, è stato realizzato un primo anello di retroazione reale limitato alla flotta ROS/Gazebo. Fino a questo punto il sistema era puramente diagnostico (rilevare, prevedere, segnalare — mai agire su ROS), coerentemente con il principio "il robot è solo la sorgente dati". L'estensione introduce un'eccezione deliberata e documentata, non una deriva silenziosa dello scope.</p>
+<ul>
+  <li><b>Corridoi fisici</b>: i due archi a corsia singola del grafo sono stati fisicamente ristretti in Gazebo con pareti statiche, rendendo osservabili su dati reali (non solo sintetici) sia il deadlock sia il livelock.</li>
+  <li><b>Iniezione di guasti dal vivo</b>: un nuovo canale di controllo ROS (<code>~fault_inject</code>, JSON su <code>std_msgs/String</code>) permette di aggiungere un guasto al bridge <i>a runtime</i> — riusa esattamente la stessa logica di attivazione/applicazione/logging dei guasti pre-schedulati, nessuna scorciatoia: il guasto iniettato dal vivo attraversa il topic <code>telemetry</code> reale.</li>
+  <li><b>Robot di riserva dedicati</b> (R4, e R8 nello scenario esteso): fermi finché non servono, mai scelti fra i robot già in missione — garantisce un sostituto sempre pronto.</li>
+  <li><b>Anello automatico</b>: quando un'anomalia di salute su <i>soglia fissa</i> (deterministica) viene rilevata su un robot reale, il backend invia il robot colpito verso un nodo di riparazione e dispaccia una riserva disponibile sulla missione originale (letta da <code>config/experiment.json</code>) — ripartendo da capo, non dal punto esatto di interruzione (limite dichiarato, §4.2).</li>
+</ul>
+<div class="note">
+<b>Nota tecnica di rilievo — falsi positivi statistici collegati a un'azione reale.</b> La prima versione dell'anello automatico si agganciava al flag <code>health_anomaly</code> di <code>fleet_state</code>, che è l'OR fra soglie fisse e Isolation Forest. Con 8 robot attivi (scenario esteso), il tasso di falsi positivi <i>strutturale</i> dell'Isolation Forest (parametro <code>contamination=0.02</code>: per definizione, circa il 2% delle predizioni scatta sempre, anche su dati perfettamente nominali) è diventato consequenziale — quasi tutta la flotta finiva "in riparazione" entro un minuto senza alcun guasto iniettato. La correzione risolutiva non è stata continuare a tarare il modello statistico, ma <b>cambiare quale segnale aziona l'azione reale</b>: l'anello automatico ora ascolta solo le anomalie di salute su soglia fissa (deterministiche per costruzione), lasciando l'Isolation Forest attivo altrove nel sistema per il suo valore di segnale "morbido". È una lezione generale, non specifica di questo progetto: un modello statistico con un tasso di falsi positivi noto per costruzione può essere accettabile come segnale informativo passivo, ma richiede cautela esplicita quando viene collegato per la prima volta a un'azione reale.
+</div>
+
+<h3>2.12 Orchestrazione e deployment</h3>
+<p>L'intero sistema è orchestrato con Docker Compose: un container Kafka, due container Spark (master/worker), un container Node per backend e dashboard, un container ROS (basato su <code>osrf/ros:noetic-desktop-full</code> con i pacchetti TurtleBot3, noVNC per l'accesso GUI in debug). All'interno del container ROS, un processo <code>supervisord</code> gestisce in parallelo: <code>roscore</code>, la simulazione Gazebo multi-robot, e diversi micro-servizi HTTP di controllo con lo stesso pattern architetturale (server <code>http.server</code> nativo, senza framework, per poche route interne): il generatore sintetico, il controllo della flotta reale (guasti live, missioni), e il lancio on-demand degli esperimenti di valutazione. L'intero stack si avvia con un singolo <code>docker compose up -d</code>, senza comandi manuali post-avvio.</p>
+
+<h2>3. Risultati</h2>
+
+<h3>3.1 Effectiveness: precisione della detection, della previsione e del TAG</h3>
+<p>Gli esperimenti di effectiveness usano <code>injected_faults</code> come ground truth oggettiva: un'anomalia rilevata è un vero positivo se cade all'interno della finestra temporale di un guasto realmente iniettato per quel robot, falso positivo altrimenti.</p>
+<table>
+  <tr><th>Metrica</th><th>Valore</th><th>Dettaglio</th></tr>
+  <tr><td>Detection salute — precision</td><td>1.00</td><td>8 robot sintetici, 3 con guasto noto (<code>spike_corrente</code>), 5 senza; 0 falsi positivi</td></tr>
+  <tr><td>Detection salute — recall</td><td>1.00</td><td>0 falsi negativi</td></tr>
+  <tr><td>Detection salute — F1</td><td>1.00</td><td>TP=3, FP=0, FN=0, TN=5</td></tr>
+  <tr><td>Previsione — errore medio assoluto (MAE)</td><td>1.6 s</td><td>su lead time previsti di centinaia di secondi (3 scenari sintetici a pendenza nota)</td></tr>
+  <tr><td>TAG — execution accuracy</td><td>21/22 (95%)</td><td>22 domande di riferimento in linguaggio naturale, confronto con SQL di verità scritto a mano</td></tr>
+</table>
+<p>L'unica domanda TAG "sbagliata" ("qual è la temperatura media dei robot con guasti") si è rivelata un'<b>ambiguità genuina della domanda</b>, non un errore del sistema: la query di riferimento calcola la media su tutta la telemetria dei robot coinvolti, mentre il modello ha scelto — in modo altrettanto legittimo — di calcolarla solo sulle anomalie di temperatura rilevate. È stata lasciata così come esempio concreto dei limiti intrinseci dell'interrogazione in linguaggio naturale, invece di correggere la domanda per farla "tornare" artificialmente.</p>
+<div class="caveat">
+<b>Limite metodologico dichiarato.</b> Le metriche di detection sopra sono misurate sul generatore sintetico (Passo 12), non sulla flotta ROS/Gazebo reale: la ground truth richiede un numero di robot e di ripetizioni controllate che sarebbe troppo lento/costoso da ottenere avviando ripetutamente l'intera simulazione fisica. È un compromesso dichiarato, non nascosto: la pipeline di detection è identica sui due percorsi (stesso schema, stesso codice Spark), e la fedeltà fisica della sorgente ROS/Gazebo è stata comunque verificata qualitativamente e in modo end-to-end (§3.3), ma le cifre di precision/recall riportate qui non provano che la detection funzioni altrettanto bene sul rumore realistico della simulazione fisica quanto su quello, più pulito, del generatore sintetico.
+</div>
+
+<h3>3.2 Efficiency: scalabilità e latenza</h3>
+<table>
+  <tr><th>Metrica</th><th>Valore</th><th>Dettaglio</th></tr>
+  <tr><td>Throughput — scaling pulito fino a</td><td>20 000 msg/s</td><td>100% del target raggiunto</td></tr>
+  <tr><td>Throughput — punto di rottura</td><td>~40 000 msg/s target</td><td>raggiunto 30 854 msg/s, 77% del target; degrado ulteriore a target più alti</td></tr>
+  <tr><td>Latenza onset&rarr;alert</td><td>media 30.2 s (3/5 prove riuscite)</td><td>misura volutamente prudente/larga, vedi nota sotto</td></tr>
+</table>
+<p>Il collo di bottiglia individuato per il throughput è il processo Python singolo del generatore sintetico (non Kafka o Spark, che nei test non mostrano saturazione alla stessa scala). Il numero di "~30s" di latenza onset&rarr;alert <b>non è la vera latenza minima del sistema</b> (osservata altrove, in condizioni dedicate, dell'ordine di pochi secondi, coerente col trigger di 2s della query di salute): la tecnica di misura usata negli esperimenti (due consumer Kafka interrogati in sequenza, non in parallelo) misura "quanto tempo impiega lo script di test ad accorgersene", non "quanto tempo impiega il sistema a produrre l'alert" — un limite dichiarato del metodo di misura, non delle prestazioni reali.</p>
+
+<h3>3.3 Verifica end-to-end sulla flotta reale</h3>
+<p>Oltre alle metriche quantitative sopra (misurate sul generatore per motivi di scala, §3.1), il comportamento end-to-end è stato verificato con dati realmente prodotti dalla simulazione fisica ROS/Gazebo, non solo letto dal codice:</p>
+<ul>
+  <li><b>Conflitto fisico reale</b>: due robot comandati verso l'estremità opposta dello stesso corridoio a corsia singola nello stesso momento hanno prodotto uno stallo reale (<code>task_state="blocked"</code> osservato su Kafka, non simulato) — prima conferma empirica che i choke point del grafo hanno un effetto fisico reale, non solo un vincolo dichiarato in un file di configurazione.</li>
+  <li><b>Iniezione di un guasto dal vivo</b> su un robot reale, tramite la dashboard: visibile nella telemetria reale (<code>motor_current</code> salito ben oltre il valore nominale) sullo stesso topic <code>telemetry</code> usato per tutto il resto della pipeline.</li>
+  <li><b>Anello di self healing</b>: l'anomalia di salute su soglia fissa, rilevata su dati reali, ha correttamente inviato il robot colpito verso il nodo di riparazione e dispacciato una riserva disponibile sulla missione originale — con selezione corretta fra più riserve disponibili quando un secondo guasto (pre-schedulato, non iniettato manualmente) è scattato in concomitanza sullo scenario a 8 robot.</li>
+  <li><b>Ripristino manuale</b>: il comando "rimetti in servizio" da dashboard riporta correttamente il robot riparato verso il nodo di riserva.</li>
+</ul>
+
+<h3>3.4 Copertura dei requisiti del corso</h3>
+<table class="req-table">
+  <tr><th>Requisito (Topic 7)</th><th>Dove è coperto</th></tr>
+  <tr><td>Ingest di stream continui da sensori</td><td>Telemetria TurtleBot3 → nodo-ponte ROS → Kafka</td></tr>
+  <tr><td>Real-time analytics</td><td>Detection in Spark Structured Streaming (salute, deadlock, livelock)</td></tr>
+  <tr><td>Offline analytics su storico → analisi predittiva</td><td>Previsione time-series dei guasti (regressione lineare)</td></tr>
+  <tr><td>Kafka / Spark Streaming</td><td>Ingestion e Structured Streaming, presenti end-to-end</td></tr>
+  <tr><td>Prediction algorithms su time series</td><td>Regressione lineare su trend dei canali di salute (ARIMA valutato e poi semplificato)</td></tr>
+  <tr><td>LLM (open source)</td><td>TAG text-to-SQL con Qwen2.5-Coder-32B via router Hugging Face</td></tr>
+  <tr><td>Esperimenti: effectiveness + efficiency</td><td>Suite di valutazione dedicata, con ground truth oggettiva</td></tr>
+</table>
+
+<h2>4. Osservazioni conclusive</h2>
+
+<h3>4.1 Lezioni tecniche</h3>
+<ol>
+  <li><b>Soglie fisse e modelli statistici sono complementari, non intercambiabili.</b> Nei test mirati del Passo 7, ciascuna tecnica ha rilevato casi che l'altra non copriva. La combinazione è più robusta di scegliere una delle due a priori.</li>
+  <li><b>Le semantiche di windowing di Structured Streaming sono sottili e vanno verificate empiricamente, non assunte.</b> Il rilevatore di livelock ha richiesto tre iterazioni (proiezione continua sull'arco, <code>outputMode("append")</code> invece di <code>"update"</code>, infine uno stato esplicito per chiave via <code>applyInPandasWithState</code>) prima di implementare correttamente la definizione di "stallo prolungato" — un'aggregazione a finestra singola, per quanto ben calibrata, non può esprimere una condizione che deve persistere nel tempo attraverso più finestre.</li>
+  <li><b>Un modello con un tasso di falsi positivi strutturale diventa consequenziale solo quando viene collegato a un'azione reale.</b> L'Isolation Forest (<code>contamination=0.02</code>) è stato tranquillamente in produzione come segnale passivo per l'intero progetto; il problema è emerso solo dopo averlo (indirettamente) collegato a un'azione automatica su hardware reale, ed è stato risolto a livello architetturale (cambiare il segnale sorgente), non tarando ulteriormente il modello.</li>
+  <li><b>La fedeltà dei dati sintetici di training conta quanto la scelta del modello.</b> Un campionamento indipendente di feature correlate nella realtà (velocità e distanza da ostacoli, per un robot fermo) ha sotto-rappresentato una combinazione tutt'altro che rara, contribuendo ai falsi positivi discussi sopra.</li>
+  <li><b>Un modello più semplice, quando il segnale lo giustifica, non è un compromesso.</b> La regressione lineare ha prodotto risultati praticamente identici ad ARIMA sullo stesso segnale reale (differenza di 0.5s su un lead time di oltre due minuti), con una tecnica enormemente più semplice da spiegare, verificare e mantenere.</li>
+  <li><b>NaN è un float Python legale, ma non è JSON valido.</b> Una metrica che può assumere legittimamente il valore NaN (es. precisione con TP+FP=0) va sempre sanificata esplicitamente prima della serializzazione: Python la accetta senza errori, ma qualunque consumatore JSON standard (incluso il parser nativo dei browser) fallisce silenziosamente su un token <code>NaN</code> letterale nel corpo della risposta.</li>
+</ol>
+
+<h3>4.2 Limiti dichiarati</h3>
+<ul>
+  <li>Le metriche ufficiali di detection (§3.1) sono misurate sul generatore sintetico, non sulla flotta ROS/Gazebo reale, per ragioni di scala/tempo sperimentale — limite dichiarato esplicitamente, non nascosto.</li>
+  <li>Nell'anello di self healing, la riserva riparte la missione del robot guasto <b>da capo</b>, non dal punto esatto di interruzione.</li>
+  <li>Non esiste un secondo livello di riserva: se una riserva stessa si guasta durante una missione, non viene sostituita.</li>
+  <li>La larghezza dei corridoi fisici (0.8 m) è stata tarata empiricamente, non validata in modo esaustivo su tutte le combinazioni di traiettorie possibili.</li>
+  <li>La soglia di conferma del livelock (60s) è una costante fissa, non adattiva al ritmo operativo della flotta.</li>
+  <li>La misura di latenza onset→alert riportata (§3.2) è volutamente prudente per un limite del metodo di misura (consumer interrogati in sequenza), non la vera latenza minima del sistema.</li>
+</ul>
+
+<h3>4.3 Sviluppi futuri</h3>
+<ul>
+  <li>Tracciare l'avanzamento esatto della missione interrotta, per permettere a una riserva di riprendere da dove il robot guasto si era fermato invece di ripartire da capo.</li>
+  <li>Un secondo livello di riserva, per tollerare il guasto di una riserva già dispacciata.</li>
+  <li>Calibrazione delle soglie adattive per singolo robot, non solo a livello di flotta, se il volume di storico per robot crescesse a sufficienza.</li>
+  <li>Una misura di latenza onset→alert più rigorosa, con consumo parallelo (non sequenziale) dei topic coinvolti.</li>
+  <li>Ripetere la misura di precision/recall della detection direttamente sulla flotta ROS/Gazebo reale, per rimuovere il limite metodologico dichiarato in §3.1/§4.2.</li>
+  <li>Un token Hugging Face dedicato al progetto, in sostituzione di quello di sviluppo attualmente riusato da un altro progetto dell'autore.</li>
+</ul>
+
+<p class="footer-note">Relazione generata a partire dalla documentazione tecnica di progetto (<code>CLAUDE.md</code>, <code>PLAN.md</code>, <code>docs/passi/*.md</code>), redatta passo per passo durante lo sviluppo e verificata empiricamente ad ogni fase.</p>
+
+</body>
+</html>

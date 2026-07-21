@@ -17,7 +17,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (  # noqa: E402
-    collect_messages, new_fig, new_run_dir, save_fig, start_consumer,
+    collect_messages, new_run_dir, start_consumer,
     start_generator, update_index, wait_generator_done,
 )
 
@@ -48,19 +48,7 @@ def run_throughput_sweep(run_dir):
         w.writeheader()
         w.writerows(rows)
 
-    fig, ax = new_fig()
-    targets = [r["target_msgs_s"] for r in rows]
     achieved = [r["achieved_msgs_s"] for r in rows]
-    ax.plot(targets, targets, "--", color="#7c8697", label="target ideale (y=x)")
-    ax.plot(targets, achieved, "o-", color="#2b6cb0", label="raggiunto")
-    if breaking_point:
-        ax.axvline(breaking_point, color="#ff4d4f", linestyle=":", label=f"punto di rottura (~{breaking_point:.0f} msg/s)")
-    ax.set_xlabel("target (msg/s)")
-    ax.set_ylabel("raggiunto (msg/s)")
-    ax.set_title("Throughput del generatore sintetico a carico crescente")
-    ax.legend()
-    save_fig(fig, os.path.join(run_dir, "throughput_sweep.png"))
-
     return {"breaking_point_msgs_s": breaking_point, "max_achieved_msgs_s": max(achieved) if achieved else None}
 
 
@@ -98,16 +86,6 @@ def run_latency_trials(run_dir, n_trials=5):
         w.writerows(rows)
 
     valid = [r["latency_s"] for r in rows if r["latency_s"] is not None]
-    fig, ax = new_fig()
-    if valid:
-        ax.bar(range(len(valid)), valid, color="#2b6cb0")
-        ax.axhline(sum(valid) / len(valid), color="#ff9800", linestyle="--", label=f"media {sum(valid)/len(valid):.1f}s")
-        ax.legend()
-    ax.set_xlabel("prova")
-    ax.set_ylabel("latenza onset->alert (s)")
-    ax.set_title("Latenza onset->alert su prove ripetute")
-    save_fig(fig, os.path.join(run_dir, "latency_onset_alert.png"))
-
     return {"trials": n_trials, "successful": len(valid),
             "avg_latency_s": (sum(valid) / len(valid)) if valid else None,
             "max_latency_s": max(valid) if valid else None}

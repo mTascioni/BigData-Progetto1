@@ -1,19 +1,30 @@
 {
   "experiment_id": "exp-001-baseline",
-  "description": "Esperimento di riferimento: 3 robot sull'anello di storage del magazzino, uno scenario di deadlock e uno di livelock sui choke point C-F/C-H, e un fault_schedule con tutte e quattro le firme di guasto di salute. Questo file è anche la definizione dell'esperimento: gli stessi valori vanno usati per generare il ground truth in injected_faults.",
+  "description": "Esperimento di riferimento: 3 robot sull'anello di storage del magazzino, uno scenario di deadlock e uno di livelock sui choke point C-F/C-H, e un fault_schedule con tutte e quattro le firme di guasto di salute. Questo file è anche la definizione dell'esperimento: gli stessi valori vanno usati per generare il ground truth in injected_faults. R5/R6/R7 (attivi) e R8 (riserva) esistono solo per lo scenario 'large' (il doppio, Passo 14: sim_multi_robot.launch scale:=large) -- in scenario 'small' (default) restano definiti qui ma non vengono spawnati, il codice li ignora semplicemente.",
   "warehouse_graph": "config/warehouse_graph.json",
   "duration_s": 900,
+
+  "repair_node": "A",
+  "reserve_node": "J",
 
   "fleet": [
     { "robot_id": "R1", "model": "burger", "start_node": "A" },
     { "robot_id": "R2", "model": "burger", "start_node": "D" },
-    { "robot_id": "R3", "model": "burger", "start_node": "I" }
+    { "robot_id": "R3", "model": "burger", "start_node": "I" },
+    { "robot_id": "R4", "model": "burger", "start_node": "J" },
+    { "robot_id": "R5", "model": "burger", "start_node": "E" },
+    { "robot_id": "R6", "model": "burger", "start_node": "G" },
+    { "robot_id": "R7", "model": "burger", "start_node": "H" },
+    { "robot_id": "R8", "model": "burger", "start_node": "F" }
   ],
 
   "tasks": [
     { "robot_id": "R1", "start_time_s": 0,  "goal_sequence": ["B", "C", "F", "G", "J", "H", "C", "B", "A"] },
     { "robot_id": "R2", "start_time_s": 5,  "goal_sequence": ["C", "H", "J", "G", "F", "C", "D"] },
-    { "robot_id": "R3", "start_time_s": 10, "goal_sequence": ["B", "E", "F", "G"] }
+    { "robot_id": "R3", "start_time_s": 10, "goal_sequence": ["B", "E", "F", "G"] },
+    { "robot_id": "R5", "start_time_s": 15, "goal_sequence": ["B", "A", "B", "I", "B", "E"] },
+    { "robot_id": "R6", "start_time_s": 20, "goal_sequence": ["J", "H", "C", "D", "C", "H", "J"] },
+    { "robot_id": "R7", "start_time_s": 25, "goal_sequence": ["C", "F", "G", "J", "H"] }
   ],
 
   "scenarios": [
