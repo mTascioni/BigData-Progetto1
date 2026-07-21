@@ -97,6 +97,14 @@ Dal Passo 11 in poi la pipeline aveva accumulato diversi processi da lanciare a 
 
 **Verificato per davvero**: `docker compose down && docker compose up -d` da zero, **nessun comando manuale successivo** — dopo l'attesa naturale di boot (Kafka + Spark + Gazebo, circa 1-2 minuti), `curl` su `/health` di `generator_service` (`:5001`) e `query_service` (`:5000`) rispondono `ok`, e `/api/fleet` del backend mostra già i 3 robot reali in movimento, tutto senza toccare `docker exec`.
 
+## Aggiornamento (2026-07-21): la simulazione ROS non parte più da sola
+
+Revisione parziale di quanto sopra, su richiesta esplicita dell'utente: si era accorto che i robot reali si muovevano già prima ancora di aprire la dashboard, e si aspettava di poter decidere lui quando farli partire (e con quale scala, small/large — Passo 14). L'avvio automatico di `sim_multi_robot` (unico fra i programmi supervisord elencati sopra) è stato quindi disattivato: **Kafka, Spark, `generator_service`, `fleet_control_service`, `eval_service` restano ad avvio automatico** (nessuna azione richiesta per averli disponibili), ma la simulazione ROS/Gazebo ora **richiede un comando esplicito** dell'utente — dalla dashboard (card "Flotta reale — controllo", nuovo selettore di scala + bottoni Avvia/Ferma) o da riga di comando (`supervisorctl start/stop sim_multi_robot` dentro il container `ros`).
+
+Realizzato riusando `fleet_control_service.py` (già presente dal Passo 14) invece di creare un nuovo servizio: due nuove route, `POST /sim/start {"scale": "small"|"large"}` e `POST /sim/stop`, che richiamano `supervisorctl start/stop sim_multi_robot` — lo stesso identico meccanismo già usato da `test/conftest.py` per mettere in pausa la simulazione durante i test, quindi nessuna incompatibilità con la suite esistente. Un dettaglio tecnico non ovvio: il comando di un programma supervisord è statico nel file di configurazione, non può ricevere argomenti diversi ad ogni `start`; la scala scelta viene quindi scritta in un file marcatore (`/tmp/shf_scale`) **prima** di invocare `supervisorctl start`, e il comando del programma lo legge (`SCALE=$(cat /tmp/shf_scale 2>/dev/null || echo small)`) prima di lanciare `roslaunch ... scale:=$SCALE`. Un tentativo di avvio mentre la simulazione è già in corso (o di stop mentre è già ferma) risponde `409`, stesso pattern già in uso per il generatore sintetico (Passo 12).
+
+**Verificato**: stato iniziale `STOPPED` dopo boot pulito; avvio con `scale=small` (~16s, il tempo di `startsecs` di supervisord) → 4 robot reali (R1-R4) compaiono in `/api/fleet`; un secondo avvio mentre già in corso → `409`; stop → i robot spariscono; avvio con `scale=large` → tutti e 8 i robot (R1-R8) compaiono entro la finestra di boot naturale di Gazebo.
+
 ## Prossimo passo
 
 Passo 2 — Contratti dati: `config/warehouse_graph.json` e `config/experiment.json`, fissando lo schema del messaggio di telemetria già definito in `CLAUDE.md`.

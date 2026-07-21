@@ -96,3 +96,5 @@ Passando allo scenario `large` (8 robot) per estendere la demo, la prima version
 - `dashboard/{index.html,style.css,app.js}` — card "Flotta reale — controllo".
 - `docker-compose.yml` — porta 5002, env `FLEET_CONTROL_SERVICE_URL`.
 - `CLAUDE.md` — nuovo invariante che documenta l'eccezione deliberata al "solo diagnosi".
+
+**Aggiornamento (2026-07-21)**: `fleet_control_service.py` esteso con `/sim/start`, `/sim/stop`, `/sim/status` — la simulazione ROS/Gazebo non parte più in automatico all'avvio dello stack, va avviata dalla dashboard scegliendo la scala. Dettagli in `docs/passi/01-scaffold-infrastruttura.md` (sezione "La simulazione ROS non parte più da sola").

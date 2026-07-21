@@ -1,6 +1,6 @@
 # Self Healing Fleet
 
-Progetto Big Data (corso Big Data, Roma Tre, 2026): ingestione continua di telemetria da una flotta di AGV (TurtleBot3 in ROS/Gazebo), detection real-time delle anomalie (salute + deadlock/livelock) con Spark Structured Streaming, previsione offline dei guasti, interrogazione in linguaggio naturale (text-to-SQL) e dashboard live.
+Progetto Big Data (corso Big Data, Roma Tre, 2026): ingestione continua di telemetria da una flotta di AGV (TurtleBot3 in ROS/Gazebo), detection real-time delle anomalie (salute + deadlock/livelock) con Spark Structured Streaming, previsione offline dei guasti, interrogazione in linguaggio naturale (layer TAG: NL → SQL → esecuzione su Spark SQL → risposta sintetizzata) e dashboard live.
 
 Dettagli completi: [`CLAUDE.md`](CLAUDE.md) (schema dati, stack, invarianti) e [`PLAN.md`](PLAN.md) (i 13 passi del piano, più un'estensione — Passo 14, flotta reale e self healing — con link alla documentazione dettagliata di ciascuno in [`docs/passi/`](docs/passi/)).
 
@@ -36,13 +36,23 @@ cd self-healing-fleet
 
 ## Configurazione (prima del primo avvio)
 
-Il layer TAG (Passo 10) chiama Qwen-Coder tramite il router Inference Providers di Hugging Face. Serve un token:
+Il layer TAG (query synthesis + answer synthesis, Passo 10) chiama un LLM (Qwen2.5-Coder-32B-Instruct) tramite il router **Inference Providers** di Hugging Face — serve un token API valido:
 
-```bash
-cp backend/src/config/HuggingFace_credentials.example.json backend/src/config/HuggingFace_credentials.json
-```
+1. Crea un token su https://huggingface.co/settings/tokens (basta un account gratuito; permessi di sola lettura/inference sono sufficienti, non serve un token con permessi di scrittura).
+2. Copia il file di esempio e inserisci il **tuo** token al posto del segnaposto:
 
-e inserire il proprio `hf_api_key` nel file appena creato (è già in `.gitignore`, non finisce nel repository). Senza questo file l'intera pipeline funziona comunque — solo la casella "Chiedi ai dati" della dashboard resterà disattivata.
+   ```bash
+   cp backend/src/config/HuggingFace_credentials.example.json backend/src/config/HuggingFace_credentials.json
+   ```
+
+   ```json
+   {
+     "hf_api_key": "hf_INCOLLA_QUI_IL_TUO_TOKEN",
+     "model": "Qwen/Qwen2.5-Coder-32B-Instruct:fastest"
+   }
+   ```
+
+`HuggingFace_credentials.json` è già in `.gitignore` (non finisce mai nel repository) — solo `HuggingFace_credentials.example.json` è versionato, come modello da copiare. **Senza questo file l'intera pipeline funziona comunque**: solo la casella "Chiedi ai dati" della dashboard resterà disattivata (`503`), tutto il resto (ingestion, detection, previsione, dashboard live) non dipende da Hugging Face. Se il tuo token non ha accesso al provider dietro `:fastest` per questo modello, prova a togliere il suffisso (`"Qwen/Qwen2.5-Coder-32B-Instruct"`) o a scegliere un altro modello supportato dagli Inference Providers — il backend va riavviato (`docker compose restart backend`) dopo aver modificato il file.
 
 ## Avvio
 
@@ -51,7 +61,9 @@ docker compose build   # la prima volta: ~5-10 minuti (immagine ROS+Gazebo+Turtl
 docker compose up -d
 ```
 
-Un solo comando: Kafka, Spark (master+worker), il servizio di query TAG, il job di detection real-time, la simulazione ROS/Gazebo con 3 robot, il generatore sintetico e il backend partono tutti da soli, senza bisogno di altri comandi manuali (vedi `docs/passi/01-scaffold-infrastruttura.md`, sezione "Avvio a comando singolo"). Il boot completo (Gazebo compreso) richiede circa 1-2 minuti.
+Un solo comando: Kafka, Spark (master+worker), il servizio di query TAG, il job di detection real-time, il generatore sintetico e il backend partono tutti da soli, senza bisogno di altri comandi manuali (vedi `docs/passi/01-scaffold-infrastruttura.md`, sezione "Avvio a comando singolo"). Il boot completo richiede circa 1-2 minuti.
+
+**La simulazione ROS/Gazebo (la flotta reale) non parte da sola** — è una scelta deliberata per lasciarti il controllo su quando avviarla e con quanti robot (vedi `docs/passi/01-scaffold-infrastruttura.md`, sezione "La simulazione ROS non parte più da sola"): apri la dashboard (http://localhost:3000), card "Flotta reale — controllo", scegli la scala (`small` = 4 robot R1-R4, `large` = 8 robot R1-R8) e premi "Avvia simulazione" — richiede ~15-20s per essere operativa. In alternativa da riga di comando: `docker exec shf-ros supervisorctl start sim_multi_robot` (scala `small` di default).
 
 ## Connettersi
 
@@ -67,23 +79,26 @@ Un solo comando: Kafka, Spark (master+worker), il servizio di query TAG, il job 
 
 ```bash
 docker compose ps                                  # tutti i container "Up"
-curl -s http://localhost:3000/api/fleet | head -c 200   # robot live (potrebbe essere vuoto per i primi ~30-60s)
+curl -s http://localhost:3000/api/fleet | head -c 200   # robot live (vuoto finche' non avvii la simulazione ROS dalla dashboard, o il generatore sintetico)
 curl -s http://localhost:5000/health                # query_service (layer TAG)
 curl -s http://localhost:5001/health                # generator_service (pannello esperimenti)
+curl -s http://localhost:5002/health                # fleet_control_service (guasti live, avvio/arresto simulazione)
 ```
 
 Per una verifica più a fondo (schema dei messaggi, precision/recall della detection, accuratezza delle previsioni, execution accuracy del TAG): [`test/README.md`](test/README.md).
 
 ## Esperimenti (Passo 13)
 
+Dalla dashboard (in fondo alla pagina, card "Risultati sperimentazioni"): bottone "Esegui ora" per effectiveness (precision/recall detection, errore previsione, accuratezza TAG) o efficiency (throughput, latenza) — i risultati compaiono man mano che ogni sotto-esperimento finisce, nessun comando manuale necessario. La simulazione ROS reale (se l'hai avviata) non va fermata: gli esperimenti usano il generatore sintetico, non la flotta reale.
+
+In alternativa, da riga di comando (produce solo CSV, non aggiorna la vista live se non tramite il refresh periodico):
+
 ```bash
-docker exec shf-ros supervisorctl stop sim_multi_robot   # libera CPU, opzionale ma consigliato
 docker exec shf-ros bash -c "cd /opt/shf/eval && python3 run_effectiveness.py"   # precision/recall, previsione, TAG
 docker exec shf-ros bash -c "cd /opt/shf/eval && python3 run_efficiency.py"      # throughput, latenza
-docker exec shf-ros supervisorctl start sim_multi_robot
 ```
 
-I risultati (CSV + grafici) compaiono automaticamente nel pannello "Risultati sperimentazioni" in fondo alla dashboard, oltre che in `/data/eval/` sul volume condiviso. Dettagli: [`docs/passi/13-valutazione-sperimentale.md`](docs/passi/13-valutazione-sperimentale.md).
+I risultati (CSV) sono in `/data/eval/` sul volume condiviso. Dettagli: [`docs/passi/13-valutazione-sperimentale.md`](docs/passi/13-valutazione-sperimentale.md).
 
 ## Fermare tutto
 

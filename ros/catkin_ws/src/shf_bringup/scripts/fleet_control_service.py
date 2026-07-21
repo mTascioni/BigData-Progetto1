@@ -6,9 +6,15 @@ kafka_bridge.py (iniezione guasto live, ~fault_inject) e graph_navigator.py
 (Passo 12): http.server nativo, un processo persistente nel container `ros`,
 niente Flask per poche route -- l'unica differenza e' che questo e' anche un
 nodo rospy (deve pubblicare su topic ROS), non un processo Python puro.
+
+Espone anche /sim/start, /sim/stop, /sim/status (2026-07-21): la simulazione
+ROS/Gazebo (`sim_multi_robot`, programma supervisord) non parte piu' in
+automatico all'avvio del container -- viene avviata/fermata da qui su
+richiesta della dashboard, con la scala (small/large) scelta dall'utente.
 """
 import json
 import os
+import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -17,6 +23,9 @@ from std_msgs.msg import String
 
 PORT = int(os.environ.get("FLEET_CONTROL_SERVICE_PORT", "5002"))
 CONFIG_DIR = os.environ.get("CONFIG_DIR", "/workspace/config")
+SCALE_FILE = "/tmp/shf_scale"
+SIM_PROGRAM = "sim_multi_robot"
+VALID_SCALES = ("small", "large")
 
 _pub_lock = threading.Lock()
 _publishers = {}  # topic -> rospy.Publisher
@@ -54,6 +63,27 @@ def _load_experiment():
         return json.load(f)
 
 
+def _supervisorctl(*args, timeout=30):
+    result = subprocess.run(
+        ["supervisorctl", *args], capture_output=True, text=True, timeout=timeout
+    )
+    return result.returncode, (result.stdout + result.stderr).strip()
+
+
+def _sim_status():
+    """Stato di sim_multi_robot via `supervisorctl status` (stesso meccanismo
+    usato da test/conftest.py per pausare/riprendere la simulazione durante
+    i test) + l'ultima scala scelta (marker file, "small" se mai scelta)."""
+    _, out = _supervisorctl("status", SIM_PROGRAM, timeout=10)
+    running = " RUNNING " in f" {out} "
+    try:
+        with open(SCALE_FILE) as f:
+            scale = f.read().strip() or "small"
+    except FileNotFoundError:
+        scale = "small"
+    return {"running": running, "scale": scale, "raw_status": out}
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, status, payload):
         body = json.dumps(payload, default=str).encode("utf-8")
@@ -70,6 +100,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             self._send_json(200, {"status": "ok"})
+        elif self.path == "/sim/status":
+            self._send_json(200, _sim_status())
         else:
             self._send_json(404, {"error": "not found"})
 
@@ -118,6 +150,32 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 _nav_control(robot_id, task["goal_sequence"])
                 self._send_json(200, {"ok": True, "nodes": task["goal_sequence"]})
+
+            elif self.path == "/sim/start":
+                scale = body.get("scale", "small")
+                if scale not in VALID_SCALES:
+                    self._send_json(400, {"error": f"scale deve essere una fra {VALID_SCALES}"})
+                    return
+                if _sim_status()["running"]:
+                    self._send_json(409, {"error": "simulazione gia' in corso, fermala prima di cambiare scala"})
+                    return
+                with open(SCALE_FILE, "w") as f:
+                    f.write(scale)
+                code, out = _supervisorctl("start", SIM_PROGRAM, timeout=30)
+                if code != 0 or "ERROR" in out:
+                    self._send_json(502, {"error": out or "avvio fallito"})
+                    return
+                self._send_json(200, {"ok": True, "scale": scale})
+
+            elif self.path == "/sim/stop":
+                if not _sim_status()["running"]:
+                    self._send_json(409, {"error": "nessuna simulazione in corso"})
+                    return
+                code, out = _supervisorctl("stop", SIM_PROGRAM, timeout=30)
+                if code != 0 or "ERROR" in out:
+                    self._send_json(502, {"error": out or "arresto fallito"})
+                    return
+                self._send_json(200, {"ok": True})
 
             else:
                 self._send_json(404, {"error": "not found"})

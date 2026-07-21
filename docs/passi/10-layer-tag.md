@@ -107,6 +107,21 @@ docker exec -d shf-spark-master bash -c "
     /opt/shf/streaming/query_service.py > /tmp/query_service.log 2>&1"
 ```
 
+## Aggiornamento (2026-07-21): il terzo stadio mancante — da text-to-SQL a TAG vero
+
+L'utente ha chiesto se fosse corretto chiamare questo layer "TAG", o se fosse un'etichetta troppo ambiziosa per quello che il codice faceva davvero. Risposta onesta dopo aver riletto `tagService.js`/`dashboard/app.js`: **no**, non lo era. La definizione di TAG (Biswal et al., *"TAG: A Unified Framework for Table-Augmented Generation"*, 2024) richiede tre stadi — query synthesis, query execution, **answer synthesis** (l'LLM rielabora le righe in una risposta) — e questo layer si fermava al secondo: restituiva SQL generato e righe grezze in una tabella HTML, senza alcuna rielaborazione. Un vero sistema di text-to-SQL, non di TAG, nonostante fosse già chiamato "TAG" sia qui sia in `PLAN.md` — un'imprecisione di terminologia presente fin dal Passo 10 originale, non introdotta ora.
+
+Aggiunto lo stadio mancante:
+- **`backend/src/services/promptBuilder.js`** — nuova `buildAnswerSynthesisMessages(question, sql, rows)`: prompt con domanda + SQL eseguita + righe risultato (troncate a 30 per non gonfiare il prompt, con avviso esplicito se il totale è maggiore), istruzione esplicita di rispondere solo in base ai dati forniti e di dichiarare "nessun risultato" invece di inventare (mitigazione diretta del rischio di allucinazione).
+- **`backend/src/services/tagService.js`** — nuova `synthesizeAnswer(...)`: una seconda chiamata allo stesso `LlmService.js` (stesso modello, stesso token — nessuna nuova infrastruttura) dopo l'esecuzione della query, il cui risultato (`answer`) viene aggiunto all'oggetto restituito da `answerQuestion(...)`. Fallimento isolato con try/catch: se la sintesi fallisce (es. rate limit del router), l'utente riceve comunque SQL e righe, solo senza la frase in linguaggio naturale.
+- **`dashboard/app.js`/`style.css`** — la risposta sintetizzata compare in un box evidenziato sopra la query SQL e la tabella grezza (che restano visibili, per trasparenza/debug). Aggiunto un piccolo `escapeHtml(...)` per non inserire testo LLM non sanificato in `innerHTML` (le righe della tabella, preesistenti, non erano già sanificate — non toccato per non allargare lo scope di questa modifica, ma la superficie più a rischio, il testo libero generato dal secondo LLM, ora lo è).
+
+**Verificato con domande reali** (non solo lette dal codice): risultato singolo ("qual è il robot con il lead time più corto?" → "Il robot con il lead time di previsione più corto è R3, con un lead time di 130 secondi."), nessun risultato ("quali robot hanno la batteria sotto il 5%?" → "Nessun risultato trovato per robot con batteria sotto il 5%.", non un'allucinazione), gruppo di righe (conteggio guasti per robot). Tutti e tre fedeli ai dati restituiti dalla query.
+
+**Bug trovato durante la verifica, non correlato al nuovo stadio**: il primo test end-to-end è rimasto bloccato per minuti — causa identica a quella già documentata sopra ("Problema incontrato: worker Spark disconnesso dal master"), ripresentatasi perché in questa sessione `spark-master` era stato ricreato (per il rebuild dell'immagine backend) senza ricreare anche `spark-worker`. Stesso fix: `docker compose up -d --force-recreate spark-worker`. Non è un difetto della soluzione implementata, ma la riprova che questo problema si ripresenta ogni volta che si dimentica il passo — vale la pena tenerlo a mente come check di routine dopo qualunque ricreazione di `spark-master`.
+
+**Nota di scopo dichiarata**: l'esperimento di valutazione (`eval/run_effectiveness.py`, Passo 13) misura solo l'accuratezza dei primi due stadi (le righe restituite contro l'SQL di verità) — non esiste ancora una metrica automatica per la fedeltà della risposta sintetizzata alle righe. Verificato finora solo a campione manualmente (sopra). Sviluppo naturale futuro, non necessario per dimostrare che lo stadio funziona.
+
 ## Prossimo passo
 
 Passo 11 — Dashboard: frontend HTML + canvas 2D servito dal backend Node, che consuma `fleet_state` da Kafka via websocket per la vista live della flotta, con un pannello robot-a-rischio (da `predictions`) e la casella di query in linguaggio naturale verso l'endpoint `/api/tag` appena costruito.

@@ -333,6 +333,12 @@ async function refreshPredictions() {
   }
 }
 
+function escapeHtml(text) {
+  const div = document.createElement("div");
+  div.textContent = text;
+  return div.innerHTML;
+}
+
 function renderTagResult(result) {
   const container = document.getElementById("tag-result");
   if (result.error) {
@@ -345,7 +351,14 @@ function renderTagResult(result) {
   const body = rows
     .map((row) => `<tr>${columns.map((c) => `<td>${row[c] ?? ""}</td>`).join("")}</tr>`)
     .join("");
+  // Stadio di answer synthesis (layer TAG completo, non solo text-to-SQL):
+  // se la sintesi e' fallita (es. rate limit HF) result.answer e' null,
+  // restano comunque SQL e righe grezze -- degrado educato, non un errore.
+  const answerHtml = result.answer
+    ? `<p class="tag-answer">${escapeHtml(result.answer)}</p>`
+    : `<p class="hint">(risposta in linguaggio naturale non disponibile per questo run -- vedi righe sotto)</p>`;
   container.innerHTML = `
+    ${answerHtml}
     <div class="sql">${result.sql}</div>
     <p class="hint">${rows.length} righe &middot; ${result.attempts} tentativo/i</p>
     <table><thead>${head}</thead><tbody>${body}</tbody></table>`;
@@ -470,6 +483,62 @@ function renderRealFleetPanel() {
         msgEl.textContent = `Errore: ${err.message}`;
       }
     });
+  });
+}
+
+// Passo 14, estensione 2026-07-21: la simulazione ROS/Gazebo non parte piu'
+// in automatico -- la dashboard la avvia/ferma scegliendo la scala, stesso
+// pattern start/stop del pannello del generatore sintetico piu' sotto.
+async function refreshSimStatus() {
+  const startBtn = document.getElementById("sim-start-btn");
+  const stopBtn = document.getElementById("sim-stop-btn");
+  const scaleSelect = document.getElementById("sim-scale-select");
+  const statusEl = document.getElementById("sim-status");
+  try {
+    const res = await fetch("/api/fleet-control/sim/status");
+    const s = await res.json();
+    startBtn.disabled = !!s.running;
+    stopBtn.disabled = !s.running;
+    scaleSelect.disabled = !!s.running;
+    statusEl.textContent = s.running
+      ? `Simulazione in corso (scala: ${s.scale}).`
+      : "Simulazione ferma.";
+  } catch {
+    statusEl.textContent = "Impossibile leggere lo stato della simulazione.";
+  }
+}
+
+function setupSimControls() {
+  document.getElementById("sim-control-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const scale = document.getElementById("sim-scale-select").value;
+    const statusEl = document.getElementById("sim-status");
+    document.getElementById("sim-start-btn").disabled = true;
+    statusEl.textContent = "Avvio in corso (puo' richiedere ~15s)...";
+    try {
+      const res = await fetch("/api/fleet-control/sim/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scale }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+    } catch (err) {
+      statusEl.textContent = `Errore: ${err.message}`;
+    }
+    refreshSimStatus();
+  });
+
+  document.getElementById("sim-stop-btn").addEventListener("click", async () => {
+    const statusEl = document.getElementById("sim-status");
+    try {
+      const res = await fetch("/api/fleet-control/sim/stop", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+    } catch (err) {
+      statusEl.textContent = `Errore: ${err.message}`;
+    }
+    refreshSimStatus();
   });
 }
 
@@ -776,15 +845,18 @@ async function main() {
   setupTagForm();
   setupGeneratorForm();
   setupRealFaultForm();
+  setupSimControls();
   setupEvalButtons();
   loadRealFleetConfig();
   refreshPredictions();
   refreshGenStatus();
+  refreshSimStatus();
   refreshEvalResults();
   renderFleetTable();
   renderRealFleetPanel();
   setInterval(refreshPredictions, 5000);
   setInterval(refreshGenStatus, 2000);
+  setInterval(refreshSimStatus, 3000);
   setInterval(renderFleetTable, 1000);
   setInterval(renderRealFleetPanel, 1000);
   setInterval(updateMapBadge, 1000);

@@ -83,6 +83,20 @@
       <h2>Flotta reale — controllo</h2>
       <p class="hint">Passo 14: guasti live sui robot ROS/Gazebo reali (finiscono nella telemetria vera, li trova il modello, non un canale a parte). Un'anomalia di salute rilevata manda automaticamente il robot in riparazione e dispaccia il robot di riserva sulla sua missione.</p>
 
+      <form id="sim-control-form" class="form-row">
+        <label>Scala
+          <select id="sim-scale-select">
+            <option value="small">small (4 robot: R1-R3 + R4 riserva)</option>
+            <option value="large">large (8 robot: R1/R2/R3/R5/R6/R7 + R4/R8 riserva)</option>
+          </select>
+        </label>
+        <div class="form-actions">
+          <button type="submit" id="sim-start-btn">Avvia simulazione</button>
+          <button type="button" id="sim-stop-btn" disabled>Ferma simulazione</button>
+        </div>
+      </form>
+      <div id="sim-status" class="hint">Simulazione ferma.</div>
+
       <table id="real-fleet-status">
         <thead><tr><th>Robot</th><th>Stato</th><th>Goal</th><th></th></tr></thead>
         <tbody></tbody>

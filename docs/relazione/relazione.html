@@ -135,7 +135,9 @@
         <li>2.9 Serving layer: Spark SQL e sistema TAG con Hugging Face</li>
         <li>2.10 Presentazione: backend Node.js e dashboard</li>
         <li>2.11 Estensione: self healing sulla flotta reale</li>
-        <li>2.12 Orchestrazione e deployment</li>
+        <li>2.12 Struttura del database (storico Parquet)</li>
+        <li>2.13 Il percorso dei dati: dalla sorgente alla visualizzazione</li>
+        <li>2.14 Orchestrazione e deployment</li>
       </ol>
     </li>
     <li>3. Risultati
@@ -317,7 +319,7 @@
 <p>La scelta della tecnica è stata rivista in corso d'opera: la prima versione usava <b>ARIMA</b> (statsmodels), come indicato dal piano originale. Un problema concreto (il default <code>trend='n'</code> di <code>ARIMA(p,1,0)</code> fa convergere il forecast a un livello asintotico costante invece di continuare a estrapolare una rampa) e la constatazione che il segnale è quasi lineare per costruzione (le firme di guasto sono rampe lineari verso un plateau) hanno motivato il passaggio a una regressione lineare — tecnica più semplice, più facile da verificare, con risultati praticamente identici ad ARIMA sullo stesso segnale reale (130.5s contro 130.0s di lead time misurato).</p>
 
 <h3>2.9 Serving layer: Spark SQL e sistema TAG con Hugging Face</h3>
-<p>Il quarto e ultimo requisito tecnologico obbligatorio — un LLM — è implementato come layer <b>TAG (Table-Augmented Generation)</b>: l'utente pone una domanda in linguaggio naturale, il sistema la traduce in SQL, la esegue sui dati storici Parquet, e restituisce il risultato.</p>
+<p>Il quarto e ultimo requisito tecnologico obbligatorio — un LLM — è implementato come layer <b>TAG (Table-Augmented Generation)</b>, secondo la definizione a tre stadi del framework omonimo (Biswal et al., <i>"TAG: A Unified Framework for Table-Augmented Generation"</i>, 2024): (1) <i>query synthesis</i> — la domanda in linguaggio naturale diventa una query eseguibile; (2) <i>query execution</i> — la query gira sui dati storici Parquet; (3) <i>answer synthesis</i> — il risultato grezzo viene rielaborato dall'LLM in una risposta in linguaggio naturale. Il terzo stadio è quello che distingue un sistema TAG da un semplice text-to-SQL (che si ferma al secondo, restituendo righe grezze) — è stato aggiunto in un secondo momento proprio per questo motivo, non presente nella prima versione del layer (vedi nota più sotto).</p>
 
 <h4>Esecuzione SQL: Spark SQL, non un motore embedded</h4>
 <p>Il piano originale prevedeva DuckDB (libreria Node embeddable). È stata preferita una soluzione che riusa il cluster Spark già in piedi per la detection e la persistenza: <code>streaming/query_service.py</code>, un processo Spark <b>persistente</b> con un server HTTP nativo (<code>http.server</code>, nessuna dipendenza aggiuntiva per due sole route) che ricrea le temp view sulle quattro cartelle Parquet ad ogni richiesta (economico: è solo discovery dello schema, non un'azione, quindi vede sempre i dati più recenti scritti dal batch layer) ed esegue la query con un <code>LIMIT</code> di sicurezza. Evitare <code>spark-submit</code> per ogni domanda risparmia i circa 10 secondi di avvio JVM per query, inaccettabili per un endpoint interattivo.</p>
@@ -328,12 +330,16 @@
 <h4>Pipeline dell'endpoint <code>POST /api/tag</code></h4>
 <p>Backend Node.js, quattro moduli con responsabilità separate:</p>
 <ul>
-  <li><b><code>promptBuilder.js</code></b> — costruisce il prompt: schema completo delle quattro tabelle Parquet (con le peculiarità del dialetto Spark SQL rilevanti: accesso a STRUCT con dot notation, <code>array_contains</code> per campi ARRAY, <code>timestamp_millis</code> per i timestamp epoch), 5 esempi few-shot, regole esplicite (solo <code>SELECT</code>, nessuna spiegazione testuale, <code>LIMIT</code> ragionevole se non specificato dalla domanda).</li>
-  <li><b><code>LlmService.js</code></b> — client verso il router Hugging Face.</li>
-  <li><b><code>sqlGuard.js</code></b> — <i>difesa in profondità</i>: ripulisce eventuali blocchi markdown residui e valida che la query generata sia una singola <code>SELECT</code>/<code>WITH</code>, priva di parole chiave di scrittura (con controllo a confini di parola, per non bloccare per errore identificatori come <code>created_at</code> a causa della sottostringa "creat"), <b>sia lato Node sia lato <code>query_service.py</code></b> — due controlli indipendenti sullo stesso vincolo.</li>
-  <li><b><code>tagService.js</code></b> — orchestra prompt → LLM → guardia → esecuzione, con <b>un retry</b> automatico (ri-prompting il modello con l'errore ricevuto) se la guardia rifiuta la query o l'esecuzione fallisce.</li>
+  <li><b><code>promptBuilder.js</code></b> — costruisce <i>due</i> prompt distinti, uno per stadio: <code>buildMessages</code> per la query synthesis (schema completo delle quattro tabelle Parquet, con le peculiarità del dialetto Spark SQL rilevanti — accesso a STRUCT con dot notation, <code>array_contains</code> per campi ARRAY, <code>timestamp_millis</code> per i timestamp epoch — 5 esempi few-shot, regole esplicite: solo <code>SELECT</code>, nessuna spiegazione testuale, <code>LIMIT</code> ragionevole se non specificato); <code>buildAnswerSynthesisMessages</code> per l'answer synthesis (domanda + SQL eseguita + righe risultato in JSON, con l'istruzione esplicita di rispondere solo in base a quei dati e di dichiarare "nessun risultato" invece di inventare — mitigazione diretta del rischio di allucinazione tipico di questo stadio).</li>
+  <li><b><code>LlmService.js</code></b> — client verso il router Hugging Face, riusato identico per entrambi gli stadi (stesso modello, stesso token: nessuna infrastruttura aggiuntiva per l'answer synthesis).</li>
+  <li><b><code>sqlGuard.js</code></b> — <i>difesa in profondità</i>, solo sullo stadio di query synthesis: ripulisce eventuali blocchi markdown residui e valida che la query generata sia una singola <code>SELECT</code>/<code>WITH</code>, priva di parole chiave di scrittura (con controllo a confini di parola, per non bloccare per errore identificatori come <code>created_at</code> a causa della sottostringa "creat"), <b>sia lato Node sia lato <code>query_service.py</code></b> — due controlli indipendenti sullo stesso vincolo.</li>
+  <li><b><code>tagService.js</code></b> — orchestra i tre stadi: prompt → LLM → guardia → esecuzione (con <b>un retry</b> automatico, ri-prompting il modello con l'errore ricevuto, se la guardia rifiuta la query o l'esecuzione fallisce) → una seconda chiamata LLM che sintetizza la risposta dalle righe ottenute. Se questa seconda chiamata fallisce (es. rate limit del router), l'errore è isolato e non fa fallire la richiesta: l'utente riceve comunque SQL e righe, solo senza la frase in linguaggio naturale — degrado educato, non un errore bloccante.</li>
 </ul>
-<p>Verificato che il modello generalizza oltre gli esempi few-shot forniti: nessuno dei 5 esempi nel prompt usa una <code>JOIN</code> o più di una CTE, eppure il sistema ha generato correttamente una query con CTE e <code>JOIN</code> per una domanda che lo richiedeva (§3.1).</p>
+<p>Verificato che il modello generalizza oltre gli esempi few-shot forniti allo stadio di query synthesis: nessuno dei 5 esempi nel prompt usa una <code>JOIN</code> o più di una CTE, eppure il sistema ha generato correttamente una query con CTE e <code>JOIN</code> per una domanda che lo richiedeva (§3.1).</p>
+
+<div class="note">
+<b>Nota di processo — da text-to-SQL a TAG.</b> La prima versione di questo layer (Passo 10 del piano originale) si fermava alla query execution: restituiva SQL generato e righe grezze in una tabella HTML, senza alcuna rielaborazione — un sistema di <i>text-to-SQL</i>, non di <i>TAG</i> nella definizione stretta del framework, nonostante fosse già così chiamato nella documentazione di progetto (imprecisione poi corretta). Lo stadio di answer synthesis è stato aggiunto in un secondo momento, quando la domanda "è corretto chiamarlo TAG?" ha reso esplicito il divario fra nome e implementazione. L'aggiunta ha richiesto poco lavoro proprio perché l'infrastruttura per il secondo stadio (client HTTP verso il router, credenziali, gestione errori) era già completamente in piedi: è bastata una funzione di prompt in più e una chiamata in più allo stesso <code>LlmService.js</code>, riusando lo stesso modello — nessun nuovo servizio, nessuna nuova credenziale.
+</div>
 
 <h3>2.10 Presentazione: backend Node.js e dashboard</h3>
 <p>Il backend (Node.js/Express) consuma <code>fleet_state</code> da Kafka (client <code>kafkajs</code>) e fa push via WebSocket ai client connessi; espone inoltre le route REST per il layer TAG, le previsioni, il controllo del generatore sintetico, il controllo della flotta reale e i risultati sperimentali. La dashboard (HTML + canvas 2D, JavaScript puro, nessun framework) disegna la mappa del magazzino, i robot colorati per stato con un anello di segnalazione per le anomalie, gli archi a capacità singola tratteggiati. Per un'animazione fluida nonostante il micro-batch di detection arrivi al massimo ogni 2 secondi, il client applica <i>dead reckoning</i>: estrapola la posizione ad ogni frame usando la velocità nota dall'ultimo messaggio, invece di attendere il prossimo pacchetto.</p>
@@ -351,13 +357,169 @@
 <b>Nota tecnica di rilievo — falsi positivi statistici collegati a un'azione reale.</b> La prima versione dell'anello automatico si agganciava al flag <code>health_anomaly</code> di <code>fleet_state</code>, che è l'OR fra soglie fisse e Isolation Forest. Con 8 robot attivi (scenario esteso), il tasso di falsi positivi <i>strutturale</i> dell'Isolation Forest (parametro <code>contamination=0.02</code>: per definizione, circa il 2% delle predizioni scatta sempre, anche su dati perfettamente nominali) è diventato consequenziale — quasi tutta la flotta finiva "in riparazione" entro un minuto senza alcun guasto iniettato. La correzione risolutiva non è stata continuare a tarare il modello statistico, ma <b>cambiare quale segnale aziona l'azione reale</b>: l'anello automatico ora ascolta solo le anomalie di salute su soglia fissa (deterministiche per costruzione), lasciando l'Isolation Forest attivo altrove nel sistema per il suo valore di segnale "morbido". È una lezione generale, non specifica di questo progetto: un modello statistico con un tasso di falsi positivi noto per costruzione può essere accettabile come segnale informativo passivo, ma richiede cautela esplicita quando viene collegato per la prima volta a un'azione reale.
 </div>
 
-<h3>2.12 Orchestrazione e deployment</h3>
+<h3>2.12 Struttura del database (storico Parquet)</h3>
+<p>Non esiste un RDBMS tradizionale: lo "storico" è un insieme di quattro cartelle Parquet su un volume Docker condiviso (<code>shf-data</code>, montato su <code>/data</code>), scritte dal batch layer (§2.7, §2.8) e lette come tabelle SQL da <code>query_service.py</code> (§2.9), che ne registra una vista temporanea per ciascuna (<code>createOrReplaceTempView</code>) — sono esattamente le quattro tabelle descritte nello schema del prompt del layer TAG. Gli schemi Spark sono centralizzati in <code>streaming/schemas.py</code>, condivisi fra il job di detection e quello di persistenza.</p>
+
+<h4>telemetry</h4>
+<p>Un record per ogni tick di ogni robot (reale o sintetico), <b>non partizionata</b>. Stesso schema del messaggio Kafka (§2.3).</p>
+<table>
+  <tr><th>Colonna</th><th>Tipo</th><th>Descrizione</th></tr>
+  <tr><td><code>ts</code></td><td>long</td><td>epoch millisecondi</td></tr>
+  <tr><td><code>robot_id</code></td><td>string</td><td>es. <code>R1</code> (reale) o <code>SIM00042</code> (sintetico)</td></tr>
+  <tr><td><code>x, y, theta</code></td><td>double</td><td>posa sul piano</td></tr>
+  <tr><td><code>v_lin, v_ang</code></td><td>double</td><td>velocità reali (odometria)</td></tr>
+  <tr><td><code>cmd_v_lin, cmd_v_ang</code></td><td>double</td><td>velocità comandate</td></tr>
+  <tr><td><code>battery_pct, motor_current, motor_temp</code></td><td>double</td><td>canali di salute (sintetizzati, §2.2)</td></tr>
+  <tr><td><code>min_obstacle_dist</code></td><td>double</td><td>lidar, metri</td></tr>
+  <tr><td><code>task_state</code></td><td>string</td><td><code>idle</code> / <code>moving</code> / <code>blocked</code> / <code>charging</code></td></tr>
+  <tr><td><code>current_edge, goal_node</code></td><td>string</td><td>posizione sul grafo del magazzino</td></tr>
+</table>
+
+<h4>anomalies</h4>
+<p><b>Partizionata per <code>type</code></b> (<code>salute</code>/<code>livelock</code>/<code>deadlock</code>, sottocartelle <code>type=.../</code>) — le query a valle filtrano quasi sempre per tipo, il partitioning evita di scansionare l'intero dataset. Lo schema è l'unione dei campi emessi dai tre meccanismi di detection (§2.6): per un dato <code>type</code>, i campi non pertinenti restano <code>null</code>.</p>
+<table>
+  <tr><th>Colonna</th><th>Tipo</th><th>Pertinente a</th><th>Descrizione</th></tr>
+  <tr><td><code>type</code></td><td>string</td><td>tutti</td><td>chiave di partizione</td></tr>
+  <tr><td><code>ts</code></td><td>long</td><td>tutti</td><td>epoch millisecondi dell'evento</td></tr>
+  <tr><td><code>robot_id</code></td><td>string</td><td>salute, livelock</td><td>assente per deadlock (coinvolge più robot, vedi <code>robots</code>)</td></tr>
+  <tr><td><code>threshold_reasons</code></td><td>array&lt;string&gt;</td><td>salute</td><td>quali soglie fisse hanno scattato (es. <code>["motor_current"]</code>)</td></tr>
+  <tr><td><code>if_anomaly</code></td><td>int (0/1)</td><td>salute</td><td>esito dell'Isolation Forest</td></tr>
+  <tr><td><code>motor_temp, motor_current, battery_pct</code></td><td>double</td><td>salute</td><td>valori dei canali al momento dell'anomalia</td></tr>
+  <tr><td><code>window_start, window_end</code></td><td>string</td><td>livelock, deadlock</td><td>estremi della finestra/checkpoint temporale</td></tr>
+  <tr><td><code>min_dist, max_dist, stall_duration_s</code></td><td>double</td><td>livelock</td><td>escursione della distanza dal goal e durata dello stallo confermato</td></tr>
+  <tr><td><code>n_msgs, n_moving</code></td><td>long</td><td>livelock, deadlock</td><td>conteggi diagnostici (quanti messaggi/robot in moto nella finestra)</td></tr>
+  <tr><td><code>current_edge</code></td><td>string</td><td>deadlock</td><td>arco a corsia singola conteso</td></tr>
+  <tr><td><code>robots</code></td><td>array&lt;string&gt;</td><td>deadlock</td><td>i robot coinvolti nello stallo</td></tr>
+</table>
+
+<h4>injected_faults</h4>
+<p><b>Non partizionata</b> — è la ground truth sperimentale (§3.1). Un record per ogni guasto, scritto alla sua <i>disattivazione</i> (quando si conoscono già entrambi gli estremi reali).</p>
+<table>
+  <tr><th>Colonna</th><th>Tipo</th><th>Descrizione</th></tr>
+  <tr><td><code>fault_id</code></td><td>string</td><td>identificativo univoco (es. <code>F1</code>, o <code>LIVE-a3f9c21b</code> per un'iniezione dal vivo)</td></tr>
+  <tr><td><code>robot_id, fault_type</code></td><td>string</td><td>chi e quale delle 4 firme di salute</td></tr>
+  <tr><td><code>start_time_s, end_time_s</code></td><td>double</td><td>orario <i>pianificato</i>, relativo all'inizio della run</td></tr>
+  <tr><td><code>params</code></td><td>struct (nested)</td><td>parametri della firma — superset di tutti i tipi, i non pertinenti sono <code>null</code> (es. <code>peak_a</code> per <code>spike_corrente</code>, <code>plateau_temp_c</code> per <code>deriva_termica</code>)</td></tr>
+  <tr><td><code>start_ts, end_ts</code></td><td>long</td><td>orario <b>reale</b> (epoch ms) di attivazione/disattivazione — il campo usato per il confronto con le anomalie rilevate (§3.1)</td></tr>
+</table>
+
+<h4>predictions</h4>
+<p><b>Non partizionata</b>, un file per ogni run di <code>forecast_failures.py</code> (§2.8) — a differenza delle altre tre, non è scritta da una query Structured Streaming ma da uno script batch invocato periodicamente.</p>
+<table>
+  <tr><th>Colonna</th><th>Tipo</th><th>Descrizione</th></tr>
+  <tr><td><code>robot_id, channel</code></td><td>string</td><td>quale robot, quale canale di salute</td></tr>
+  <tr><td><code>predicted_at_ts</code></td><td>long</td><td>istante (epoch ms) in cui la previsione è stata calcolata</td></tr>
+  <tr><td><code>current_value, slope_per_min</code></td><td>double</td><td>ultimo valore osservato e pendenza stimata</td></tr>
+  <tr><td><code>critical_threshold</code></td><td>double</td><td>soglia critica del canale (§2.8)</td></tr>
+  <tr><td><code>predicted_crossing_ts</code></td><td>long</td><td>istante previsto di superamento soglia</td></tr>
+  <tr><td><code>lead_time_s</code></td><td>double</td><td><code>predicted_crossing_ts − predicted_at_ts</code>, in secondi</td></tr>
+  <tr><td><code>model</code></td><td>string</td><td>sempre <code>"regressione lineare (OLS)"</code> nella versione attuale</td></tr>
+  <tr><td><code>n_points</code></td><td>int</td><td>quanti punti ricampionati sono entrati nel fit</td></tr>
+</table>
+
+<h3>2.13 Il percorso dei dati: dalla sorgente alla visualizzazione (e viceversa)</h3>
+<p>Due percorsi distinti attraversano il sistema: uno porta la <b>telemetria</b> dal robot fino alla dashboard (e allo storico), l'altro porta un <b>comando</b> dalla dashboard fino al robot. Il secondo, quando esiste (guasto iniettato dal vivo, avvio/arresto della simulazione, missione assegnata), si richiude sempre nel primo: un comando accettato si manifesta come telemetria reale che rifà tutto il giro del percorso A.</p>
+
+<h4>Percorso A — dalla telemetria alla dashboard</h4>
+<div class="diagram">
+  <div class="box" style="max-width:320pt;"><b>① Gazebo</b><small>fisica simulata: odometria, lidar, dinamica del robot</small></div>
+  <div class="arrow-down">&darr;</div>
+  <div class="box" style="max-width:320pt;"><b>② kafka_bridge.py</b><small>nodo rospy per robot: sottoscrive /odom /scan /cmd_vel /move_base/*, sintetizza i canali di salute, applica <code>FaultInjector</code> se un guasto è attivo, compone il messaggio nello schema condiviso</small></div>
+  <div class="arrow-down">&darr;</div>
+  <div class="box" style="max-width:320pt;"><b>③ Kafka — topic <code>telemetry</code></b><small>partizionato per <code>robot_id</code></small></div>
+  <div class="arrow-down">&darr;</div>
+  <div class="row">
+    <div class="box"><b>④a detection_job.py</b><small>speed layer, §2.6</small></div>
+    <div class="arrow-right">&rarr;</div>
+    <div class="box"><b><code>fleet_state</code> / <code>anomalies</code></b><small>topic Kafka</small></div>
+    <div class="arrow-right">&rarr;</div>
+    <div class="box"><b>⑤ backend Node</b><small><code>fleetStateStore.js</code> / <code>anomalyStream.js</code>, consumer kafkajs</small></div>
+    <div class="arrow-right">&rarr;</div>
+    <div class="box"><b>⑥ WebSocket</b><small>push ai client</small></div>
+  </div>
+  <div class="arrow-down">&darr;</div>
+  <div class="box" style="max-width:320pt;"><b>⑦ Dashboard</b><small>canvas 2D, live</small></div>
+  <div class="arrow-down">&darr;</div>
+  <div class="row">
+    <div class="box"><b>④b persistence_job.py</b><small>batch layer, §2.7</small></div>
+    <div class="arrow-right">&rarr;</div>
+    <div class="box"><b>Parquet</b><small>/data, §2.12</small></div>
+  </div>
+  <div class="arrow-down">&darr;</div>
+  <div class="row">
+    <div class="box"><b>Dashboard</b><small>domanda in linguaggio naturale</small></div>
+    <div class="arrow-right">&rarr;</div>
+    <div class="box"><b>⑧ router Hugging Face</b><small>1ª chiamata: query synthesis, NL → SQL (§2.9)</small></div>
+    <div class="arrow-right">&rarr;</div>
+    <div class="box"><b>⑨ query_service.py</b><small>Spark SQL, esegue la query su Parquet</small></div>
+  </div>
+  <div class="arrow-down">&darr;</div>
+  <div class="row">
+    <div class="box"><b>⑩ router Hugging Face</b><small>2ª chiamata: answer synthesis, righe → risposta NL</small></div>
+    <div class="arrow-right">&rarr;</div>
+    <div class="box"><b>Dashboard</b><small>risposta + SQL + tabella</small></div>
+  </div>
+  <div class="fig-caption">Fig. 2 — Percorso A: dalla fisica simulata alla dashboard, per la via rapida (④a, real-time) e per quella storica (④b, batch → query ad-hoc). <code>forecast_failures.py</code> e <code>adaptive_thresholds.py</code> (§2.7, §2.8) si inseriscono anch'essi qui, leggendo dallo stesso Parquet. Il router Hugging Face compare due volte (⑧, ⑩): stessa infrastruttura, due chiamate con prompt diversi — è la struttura a tre stadi del layer TAG (§2.9).</div>
+</div>
+
+<h4>Percorso B — dalla dashboard al robot (comandi)</h4>
+<div class="diagram">
+  <div class="box" style="max-width:320pt;"><b>① Dashboard</b><small>form: inietta guasto / avvia-ferma simulazione / rimetti in servizio</small></div>
+  <div class="arrow-down">&darr;</div>
+  <div class="box" style="max-width:320pt;"><b>② backend Node</b><small><code>routes/fleetControl.js</code> → <code>services/fleetControlService.js</code> (client HTTP)</small></div>
+  <div class="arrow-down">&darr;</div>
+  <div class="box" style="max-width:320pt;"><b>③ fleet_control_service.py</b><small>nodo rospy nel container <code>ros</code>, porta 5002 (§2.11)</small></div>
+  <div class="arrow-down">&darr;</div>
+  <div class="row">
+    <div class="box"><b>④ topic ROS <code>~fault_inject</code> / <code>~nav_control</code></b><small>guasto live / missione</small></div>
+    <div class="arrow-right">&rarr;</div>
+    <div class="box"><b>oppure <code>supervisorctl start/stop</code></b><small>avvio/arresto simulazione</small></div>
+  </div>
+  <div class="arrow-down">&darr;</div>
+  <div class="box" style="max-width:320pt;"><b>⑤ kafka_bridge.py / graph_navigator.py</b><small>applicano il guasto al prossimo tick, o annullano il goal corrente assegnandone uno nuovo</small></div>
+  <div class="arrow-down">&darr;</div>
+  <div class="box" style="max-width:320pt;"><b>rientra nel Percorso A</b><small>il comando accettato è ora telemetria reale — passo ③ di Fig. 2</small></div>
+  <div class="fig-caption">Fig. 3 — Percorso B: un'azione dell'utente non modifica mai lo stato del robot "a distanza" — arriva come comando su un topic ROS o come richiesta a <code>supervisorctl</code>, ed è il nodo ROS stesso ad agire, generando poi telemetria reale che il sistema di detection vede come vedrebbe qualunque altro evento.</div>
+</div>
+
+<h3>2.14 Orchestrazione e deployment</h3>
 <p>L'intero sistema è orchestrato con Docker Compose: un container Kafka, due container Spark (master/worker), un container Node per backend e dashboard, un container ROS (basato su <code>osrf/ros:noetic-desktop-full</code> con i pacchetti TurtleBot3, noVNC per l'accesso GUI in debug). All'interno del container ROS, un processo <code>supervisord</code> gestisce in parallelo: <code>roscore</code>, la simulazione Gazebo multi-robot, e diversi micro-servizi HTTP di controllo con lo stesso pattern architetturale (server <code>http.server</code> nativo, senza framework, per poche route interne): il generatore sintetico, il controllo della flotta reale (guasti live, missioni), e il lancio on-demand degli esperimenti di valutazione. L'intero stack si avvia con un singolo <code>docker compose up -d</code>, senza comandi manuali post-avvio.</p>
 
 <h2>3. Risultati</h2>
 
 <h3>3.1 Effectiveness: precisione della detection, della previsione e del TAG</h3>
-<p>Gli esperimenti di effectiveness usano <code>injected_faults</code> come ground truth oggettiva: un'anomalia rilevata è un vero positivo se cade all'interno della finestra temporale di un guasto realmente iniettato per quel robot, falso positivo altrimenti.</p>
+
+<h4>Il meccanismo di ground truth</h4>
+<p>Nessuna delle metriche seguenti è stimata "a occhio": tutte si appoggiano a un meccanismo comune, oggettivo e riproducibile. Ogni volta che un guasto viene iniettato — dal vivo o pre-schedulato, sulla flotta reale o sul generatore sintetico (§2.2, §2.5) — un record viene scritto sul topic <code>injected_faults</code> con <code>robot_id</code>, <code>fault_type</code>, e l'intervallo <code>[start_ts, end_ts]</code> in cui il guasto è stato effettivamente attivo (timestamp reali di attivazione/disattivazione, non quelli pianificati). Questo record è la <b>ground truth</b>: una verità nota a priori, indipendente da qualunque cosa il sistema di detection creda di aver visto.</p>
+<p>Il confronto è sempre lo stesso, sia negli esperimenti di <code>eval/</code> sia nel job offline di calibrazione delle soglie (<code>offline/adaptive_thresholds.py</code>, §2.7):</p>
+<ul>
+  <li>un'anomalia rilevata (evento su <code>anomalies</code>) è un <b>vero positivo</b> se il suo timestamp cade dentro la finestra <code>[start_ts, end_ts]</code> di un guasto realmente attivo <i>per quello stesso <code>robot_id</code></i>;</li>
+  <li>un'anomalia rilevata <b>fuori</b> da qualunque finestra di guasto attivo per quel robot è un <b>falso positivo</b> — il sistema ha segnalato qualcosa che, per la ground truth, non stava succedendo;</li>
+  <li>un guasto la cui finestra non produce <b>nessuna</b> anomalia corrispondente è un <b>falso negativo</b> — il sistema non si è accorto di un guasto realmente avvenuto;</li>
+  <li>un robot senza guasti attivi e senza anomalie rilevate è un <b>vero negativo</b>.</li>
+</ul>
+<p>Questo è possibile solo perché l'iniezione dei guasti passa dallo stesso percorso dati della telemetria reale (§2.2): la ground truth e il segnale osservato dal detector condividono lo stesso orologio e lo stesso <code>robot_id</code>, quindi il confronto non richiede alcuna correlazione manuale o approssimata.</p>
+
+<h4>Detection di salute — come si conta vero/falso positivo in pratica</h4>
+<p>L'esperimento (<code>eval/run_effectiveness.py</code>, funzione <code>run_detection_experiment</code>) mette in campo 8 robot-token del generatore sintetico; a 3 di essi (scelti in anticipo, indici noti) viene iniettato un guasto <code>spike_corrente</code> di 15 secondi; i restanti 5 non ricevono alcun guasto. Uno script si mette in ascolto sul topic <code>anomalies</code> per l'intera durata del run (più un margine) e registra <b>quali <code>robot_id</code> compaiono almeno una volta</b> come evento <code>type="salute"</code>. A questo punto, per ciascuno degli 8 robot si applica meccanicamente la tabella di verità:</p>
+<table>
+  <tr><th></th><th>rilevato (compare su <code>anomalies</code>)</th><th>non rilevato</th></tr>
+  <tr><td><b>guasto realmente iniettato</b></td><td>vero positivo (TP)</td><td>falso negativo (FN)</td></tr>
+  <tr><td><b>nessun guasto iniettato</b></td><td>falso positivo (FP)</td><td>vero negativo (TN)</td></tr>
+</table>
+<p>Da qui, le formule standard: <code>precision = TP / (TP + FP)</code> (fra tutti gli allarmi lanciati, quanti erano guasti veri), <code>recall = TP / (TP + FN)</code> (fra tutti i guasti veri, quanti sono stati notati), <code>F1</code> la loro media armonica. Nel run riportato in tabella: TP=3 (tutti e 3 i robot guasti rilevati), FP=0 (nessuno dei 5 robot sani è mai comparso su <code>anomalies</code>), FN=0, TN=5 — da cui precision=recall=F1=1.00.</p>
+<p>Un dettaglio importante per l'interpretazione: questa metrica è <i>binaria per robot</i> ("è mai stato rilevato durante il guasto, sì/no"), non conta quante volte l'anomalia è stata ri-emessa nella finestra (il job di detection, §2.6, scrive un evento ad ogni trigger di 2s in cui la soglia/il modello restano sopra soglia — durante 15s di guasto attivo, il conteggio grezzo di eventi sarebbe quindi tipicamente 6-8, non 1). Contare "rilevato/non rilevato" per robot, invece che il numero grezzo di eventi, evita di gonfiare artificialmente precision/recall sommando eventi che sono in realtà la stessa anomalia osservata più volte.</p>
+
+<h4>Deadlock e livelock: verifica di scenario, non una confusion matrix</h4>
+<p>A differenza della detection di salute, deadlock e livelock <b>non hanno</b> un esperimento di precision/recall quantitativo in <code>eval/</code>: non esiste un modo economico di generare, in modo ripetuto e controllato, decine di episodi di stallo comportamentale veri e falsi su cui calcolare una statistica (a differenza di un guasto di salute, che si inietta sommando un valore a un canale). La loro correttezza è invece verificata nella suite <code>test/</code> (pass/fail, non numeri) con scenari costruiti apposta: test che devono <i>far scattare</i> l'anomalia (es. un robot fermo con <code>task_state="moving"</code> per oltre 60s consecutivi) e test che <i>non devono farla scattare</i> (es. robot in movimento normale, o durante un sorpasso su corridoio a corsia singola). È lo stesso principio di ground truth — uno scenario con uno stato atteso noto a priori — applicato in modo booleano invece che statistico. I tre bug di falsi positivi corretti sul rilevatore di livelock (§2.6) sono stati tutti trovati esattamente in questo modo: un test "non deve scattare" che scattava.</p>
+
+<h4>Previsione — come si misura l'errore</h4>
+<p>Anche qui la verità di riferimento è costruita, non osservata: tre segnali sintetici con <b>pendenza nota a priori</b> (es. <code>motor_temp</code> che cresce di 0.05°C/s da un valore iniziale noto). Da pendenza e valore iniziale si calcola <b>analiticamente</b> l'istante in cui la retta vera incrocerebbe la soglia critica del canale, e da lì il lead time "vero" (<code>expected_lead_time_s = tempo di incrocio atteso − durata della finestra osservata</code>). Si dà in pasto lo stesso segnale a <code>predictive/forecast_failures.py</code> (§2.8) e si confronta il suo lead time previsto con quello atteso: <code>errore = lead_time_previsto − lead_time_atteso</code>. L'MAE (1.6s) è la media del valore assoluto di questo errore sui tre scenari — un numero piccolo perché il segnale è, per costruzione del test, una retta pulita senza rumore: è una misura della correttezza del calcolo analitico d'incrocio, non (solo) della qualità del fit su dati rumorosi reali.</p>
+
+<h4>TAG — come si stabilisce se una risposta è corretta</h4>
+<p>Per ciascuna delle 22 domande di riferimento (<code>eval/reference_questions.py</code>) esiste una query SQL "di verità" scritta a mano. Lo script esegue <b>entrambe</b> le query sugli stessi dati storici: quella di riferimento direttamente via Spark SQL, e quella generata dal layer TAG passando dalla domanda in linguaggio naturale. Il confronto fra i due risultati (funzione <code>question_correct</code>/<code>row_matches</code>) non richiede un match testuale esatto della query SQL generata (due query sintatticamente diverse possono produrre lo stesso risultato corretto) — confronta invece <b>le righe restituite</b>: ogni riga della verità di riferimento deve avere una riga corrispondente nel risultato del TAG, con i valori numerici confrontati con una tolleranza (±0.5, per assorbire arrotondamenti) e i valori testuali confrontati per uguaglianza esatta. Una domanda è "corretta" solo se <i>tutte</i> le righe attese trovano una corrispondenza — non una corrispondenza parziale.</p>
+<p><b>Limite di scopo dichiarato</b>: questo confronto misura la correttezza dei primi due stadi del layer TAG (query synthesis + query execution, §2.9) — le righe restituite, non la frase in linguaggio naturale del terzo stadio (answer synthesis). Non esiste ancora una metrica automatica che verifichi se la risposta sintetizzata rispecchi fedelmente le righe (un compito di per sé non banale, verificare che un LLM non stia parafrasando in modo fuorviante l'output di un altro LLM) — verificato finora solo a campione, manualmente (§2.9). È uno sviluppo naturale futuro (§4.3), non necessario per dimostrare che lo stadio funziona: il prompt istruisce esplicitamente a non inventare valori assenti dalle righe fornite, e i casi provati a mano (risultato singolo, nessun risultato, gruppo di righe) hanno prodotto risposte fedeli ai dati.</p>
+
 <table>
   <tr><th>Metrica</th><th>Valore</th><th>Dettaglio</th></tr>
   <tr><td>Detection salute — precision</td><td>1.00</td><td>8 robot sintetici, 3 con guasto noto (<code>spike_corrente</code>), 5 senza; 0 falsi positivi</td></tr>
@@ -372,13 +534,20 @@
 </div>
 
 <h3>3.2 Efficiency: scalabilità e latenza</h3>
+
+<h4>Throughput — come si definisce il punto di rottura</h4>
+<p>Lo sweep (<code>eval/run_efficiency.py</code>, funzione <code>run_throughput_sweep</code>) lancia il generatore sintetico a carichi crescenti (50, 100, 250, 500, 1000, 2000, 4000, 6000 robot-token, tutti a 10 Hz — target nominale <code>num_robot × hz</code> messaggi/secondo) e, per ciascun livello, legge dal generatore stesso quanti messaggi ha effettivamente pubblicato nell'intervallo (<code>achieved_rate_msgs_s</code>, calcolato lato produttore, non stimato lato consumatore). Il rapporto <code>ratio = raggiunto / target</code> è la misura di quanto il sistema regge quel livello di carico; il <b>punto di rottura</b> è definito come il primo target per cui <code>ratio</code> scende sotto una soglia fissa dell'80% (<code>BREAKING_POINT_RATIO = 0.8</code>) — una soglia arbitraria ma dichiarata, non dedotta a posteriori dai dati.</p>
+
+<h4>Latenza onset&rarr;alert — come si misura</h4>
+<p>Per ciascuna delle 5 prove (<code>run_latency_trials</code>): si inietta un guasto <code>spike_corrente</code> su un singolo robot-token e si legge, dal topic <code>injected_faults</code>, il timestamp reale di attivazione (<code>start_ts</code>, scritto dal codice che applica il guasto, non l'istante pianificato). Si attende quindi il primo evento su <code>anomalies</code> per quello stesso robot e si registra l'istante in cui lo script di test lo riceve. La latenza riportata è la differenza fra questi due istanti.</p>
+
 <table>
   <tr><th>Metrica</th><th>Valore</th><th>Dettaglio</th></tr>
   <tr><td>Throughput — scaling pulito fino a</td><td>20 000 msg/s</td><td>100% del target raggiunto</td></tr>
-  <tr><td>Throughput — punto di rottura</td><td>~40 000 msg/s target</td><td>raggiunto 30 854 msg/s, 77% del target; degrado ulteriore a target più alti</td></tr>
+  <tr><td>Throughput — punto di rottura</td><td>~40 000 msg/s target</td><td>raggiunto 30 854 msg/s, 77% del target (sotto l'80%); degrado ulteriore a target più alti</td></tr>
   <tr><td>Latenza onset&rarr;alert</td><td>media 30.2 s (3/5 prove riuscite)</td><td>misura volutamente prudente/larga, vedi nota sotto</td></tr>
 </table>
-<p>Il collo di bottiglia individuato per il throughput è il processo Python singolo del generatore sintetico (non Kafka o Spark, che nei test non mostrano saturazione alla stessa scala). Il numero di "~30s" di latenza onset&rarr;alert <b>non è la vera latenza minima del sistema</b> (osservata altrove, in condizioni dedicate, dell'ordine di pochi secondi, coerente col trigger di 2s della query di salute): la tecnica di misura usata negli esperimenti (due consumer Kafka interrogati in sequenza, non in parallelo) misura "quanto tempo impiega lo script di test ad accorgersene", non "quanto tempo impiega il sistema a produrre l'alert" — un limite dichiarato del metodo di misura, non delle prestazioni reali.</p>
+<p>Il collo di bottiglia individuato per il throughput è il processo Python singolo del generatore sintetico (non Kafka o Spark, che nei test non mostrano saturazione alla stessa scala). Il numero di "~30s" di latenza onset&rarr;alert <b>non è la vera latenza minima del sistema</b> (osservata altrove, in condizioni dedicate, dell'ordine di pochi secondi, coerente col trigger di 2s della query di salute): il meccanismo di misura descritto sopra usa due consumer Kafka interrogati <b>in sequenza</b> (prima si attende la conferma del guasto, poi si comincia ad ascoltare gli alert), quindi il numero misura anche il tempo speso dallo script di test stesso prima di mettersi in ascolto, non solo il tempo che il sistema impiega a produrre l'alert — un limite dichiarato del metodo di misura, non delle prestazioni reali (§4.3 propone una misura più rigorosa come sviluppo futuro).</p>
 
 <h3>3.3 Verifica end-to-end sulla flotta reale</h3>
 <p>Oltre alle metriche quantitative sopra (misurate sul generatore per motivi di scala, §3.1), il comportamento end-to-end è stato verificato con dati realmente prodotti dalla simulazione fisica ROS/Gazebo, non solo letto dal codice:</p>
@@ -431,6 +600,7 @@
   <li>Una misura di latenza onset→alert più rigorosa, con consumo parallelo (non sequenziale) dei topic coinvolti.</li>
   <li>Ripetere la misura di precision/recall della detection direttamente sulla flotta ROS/Gazebo reale, per rimuovere il limite metodologico dichiarato in §3.1/§4.2.</li>
   <li>Un token Hugging Face dedicato al progetto, in sostituzione di quello di sviluppo attualmente riusato da un altro progetto dell'autore.</li>
+  <li>Una metrica automatica di fedeltà per lo stadio di answer synthesis del layer TAG (§2.9, §3.1): verificare a campione che la risposta in linguaggio naturale rispecchi davvero le righe restituite, non solo che le righe stesse siano corrette.</li>
 </ul>
 
 <p class="footer-note">Relazione generata a partire dalla documentazione tecnica di progetto (<code>CLAUDE.md</code>, <code>PLAN.md</code>, <code>docs/passi/*.md</code>), redatta passo per passo durante lo sviluppo e verificata empiricamente ad ogni fase.</p>

@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import LlmService from "./LlmService.js";
-import { buildMessages, buildRetryMessages } from "./promptBuilder.js";
+import { buildAnswerSynthesisMessages, buildMessages, buildRetryMessages } from "./promptBuilder.js";
 import { runSql } from "./queryService.js";
 import { extractSql, validateSelectOnly } from "./sqlGuard.js";
 
@@ -30,6 +30,21 @@ export function isConfigured() {
   return llm !== null;
 }
 
+// Terzo stadio del layer TAG (answer synthesis, vedi promptBuilder.js): una
+// chiamata in piu' allo stesso LLM/router, non un servizio nuovo. Se fallisce
+// (es. rate limit) non deve far fallire l'intera risposta -- l'utente vede
+// comunque righe/SQL, solo senza la frase in linguaggio naturale.
+async function synthesizeAnswer(question, sql, rows) {
+  try {
+    const messages = buildAnswerSynthesisMessages(question, sql, rows);
+    const answer = await llm.getResponse(messages, { maxTokens: 300 });
+    return answer.trim();
+  } catch (err) {
+    console.error(`[tagService] sintesi della risposta fallita: ${err.message}`);
+    return null;
+  }
+}
+
 export async function answerQuestion(question) {
   if (!llm) {
     throw new Error("Layer TAG non configurato: manca backend/src/config/HuggingFace_credentials.json");
@@ -53,7 +68,8 @@ export async function answerQuestion(question) {
 
     try {
       const result = await runSql(sql);
-      return { question, sql, attempts: attempt + 1, ...result };
+      const answer = await synthesizeAnswer(question, sql, result.rows || []);
+      return { question, sql, attempts: attempt + 1, answer, ...result };
     } catch (err) {
       lastError = err.message;
     }

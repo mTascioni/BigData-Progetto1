@@ -102,6 +102,35 @@ Regole:
   ];
 }
 
+// Terzo stadio del layer TAG (answer synthesis): senza questo passaggio il
+// sistema e' un text-to-SQL (query synthesis + execution, restituisce righe
+// grezze), non un TAG vero e proprio -- la definizione di TAG (Biswal et al.,
+// "TAG: A Unified Framework for Table-Augmented Generation", 2024) richiede
+// che l'LLM rielabori il risultato in una risposta, non solo generi la query.
+const MAX_ROWS_FOR_SYNTHESIS = 30;
+
+export function buildAnswerSynthesisMessages(question, sql, rows) {
+  const truncated = rows.length > MAX_ROWS_FOR_SYNTHESIS;
+  const sample = truncated ? rows.slice(0, MAX_ROWS_FOR_SYNTHESIS) : rows;
+
+  const system = `Sei un assistente che risponde in italiano, in linguaggio naturale, a domande sui dati di una flotta di robot AGV in un magazzino.
+
+Ti vengono forniti: la domanda originale, la query Spark SQL che e' stata eseguita, e le righe che quella query ha restituito (in JSON). Rispondi SOLO in base a questi dati -- non inventare valori assenti dalle righe fornite. Se le righe sono vuote, dillo esplicitamente ("nessun risultato trovato per...") invece di inventare una risposta.${
+    truncated
+      ? ` Attenzione: ti sono state fornite solo le prime ${MAX_ROWS_FOR_SYNTHESIS} righe su ${rows.length} totali; se rilevante, menziona che il risultato completo e' piu' ampio.`
+      : ""
+  }
+
+Rispondi in poche frasi, in modo diretto e naturale. Non ripetere la query SQL, non descrivere lo schema della tabella: vai dritto alla risposta.`;
+
+  const user = `Domanda: ${question}\n\nQuery eseguita:\n${sql}\n\nRighe risultato (JSON):\n${JSON.stringify(sample)}`;
+
+  return [
+    { role: "system", content: system },
+    { role: "user", content: user },
+  ];
+}
+
 export function buildRetryMessages(previousMessages, failedSql, errorMessage) {
   return [
     ...previousMessages,

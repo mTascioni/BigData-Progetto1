@@ -202,6 +202,16 @@ button:disabled { opacity: 0.6; cursor: wait; }
   font-size: 0.8rem;
 }
 
+#tag-result .tag-answer {
+  background: #10233f;
+  border: 1px solid #2b6cb0;
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 0.6rem;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
 #tag-result .sql {
   background: #0c1117;
   border: 1px solid #232c39;

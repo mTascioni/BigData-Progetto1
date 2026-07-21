@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { Router } from "express";
 
-import { injectFault, returnToService } from "../services/fleetControlService.js";
+import { getSimStatus, injectFault, returnToService, startSim, stopSim } from "../services/fleetControlService.js";
 import { clearRepairFlag } from "../services/fleetStateStore.js";
 
 const CONFIG_DIR = process.env.CONFIG_DIR || "/workspace/config";
@@ -51,6 +51,35 @@ router.post("/return-to-service", async (req, res) => {
     const result = await returnToService(robotId);
     clearRepairFlag(robotId); // il robot puo' essere rimandato in riparazione in futuro
     res.json(result);
+  } catch (err) {
+    res.status(err.status || 502).json({ error: err.message });
+  }
+});
+
+// Passo 14, estensione 2026-07-21: la simulazione ROS/Gazebo non parte piu'
+// in automatico all'avvio dello stack -- la dashboard la avvia/ferma da qui,
+// scegliendo la scala (small/large). Stesso pattern start/stop/status del
+// pannello del generatore sintetico (routes/generator.js, Passo 12).
+router.get("/sim/status", async (_req, res) => {
+  try {
+    res.json(await getSimStatus());
+  } catch (err) {
+    res.status(err.status || 502).json({ error: err.message });
+  }
+});
+
+router.post("/sim/start", async (req, res) => {
+  try {
+    const { scale } = req.body || {};
+    res.json(await startSim(scale || "small"));
+  } catch (err) {
+    res.status(err.status || 502).json({ error: err.message });
+  }
+});
+
+router.post("/sim/stop", async (_req, res) => {
+  try {
+    res.json(await stopSim());
   } catch (err) {
     res.status(err.status || 502).json({ error: err.message });
   }
