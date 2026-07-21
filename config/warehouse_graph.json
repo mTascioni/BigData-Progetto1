@@ -1,0 +1,34 @@
+{
+  "description": "Magazzino piccolo a corsie: un anello di storage (F-G-J-H) raggiungibile dall'aisle principale (A-B-C-D) tramite due corridoi a corsia singola (C-F, C-H), pensati come choke point per gli scenari di deadlock/livelock. Coordinate in metri, pensate per un mondo Gazebo di riferimento indicativo 40x30m.",
+  "nodes": [
+    { "id": "A", "x": 0,  "y": 0,   "kind": "dock" },
+    { "id": "B", "x": 10, "y": 0,   "kind": "junction" },
+    { "id": "C", "x": 20, "y": 0,   "kind": "junction" },
+    { "id": "D", "x": 30, "y": 0,   "kind": "dock" },
+    { "id": "E", "x": 10, "y": 10,  "kind": "storage" },
+    { "id": "F", "x": 20, "y": 10,  "kind": "storage" },
+    { "id": "G", "x": 30, "y": 10,  "kind": "storage" },
+    { "id": "H", "x": 20, "y": -10, "kind": "storage" },
+    { "id": "I", "x": 10, "y": -10, "kind": "charging" },
+    { "id": "J", "x": 30, "y": -10, "kind": "storage" }
+  ],
+  "edges": [
+    { "id": "A-B", "from": "A", "to": "B", "capacity": 2, "length": 10 },
+    { "id": "B-C", "from": "B", "to": "C", "capacity": 2, "length": 10 },
+    { "id": "C-D", "from": "C", "to": "D", "capacity": 2, "length": 10 },
+    { "id": "B-I", "from": "B", "to": "I", "capacity": 2, "length": 10 },
+    { "id": "B-E", "from": "B", "to": "E", "capacity": 2, "length": 10 },
+    { "id": "E-F", "from": "E", "to": "F", "capacity": 2, "length": 10 },
+    { "id": "F-G", "from": "F", "to": "G", "capacity": 2, "length": 10 },
+    { "id": "H-J", "from": "H", "to": "J", "capacity": 2, "length": 10 },
+    { "id": "G-J", "from": "G", "to": "J", "capacity": 2, "length": 20 },
+    { "id": "C-F", "from": "C", "to": "F", "capacity": 1, "length": 10 },
+    { "id": "C-H", "from": "C", "to": "H", "capacity": 1, "length": 10 }
+  ],
+  "notes": [
+    "Gli archi sono percorribili in entrambe le direzioni; 'from'/'to' fissano solo l'id, non un verso obbligato.",
+    "capacity = numero massimo di robot che possono occupare contemporaneamente l'arco; capacity=1 = corsia singola (choke point).",
+    "L'anello C-F-G-J-H-C con i due choke point a corsia singola (C-F, C-H) è il punto d'innesco per gli scenari deadlock/livelock del Passo 5.",
+    "'current_edge' nella telemetria referenzia l'id di uno di questi archi; 'goal_node' referenzia l'id di uno di questi nodi."
+  ]
+}

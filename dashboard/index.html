@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <title>Self Healing Fleet</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>Self Healing Fleet</h1>
+    <div id="conn-status" class="badge badge-off">websocket: disconnesso</div>
+  </header>
+
+  <main>
+    <section class="map-panel">
+      <div id="map-badge" class="map-badge">Vista: grafo reale (medium)</div>
+      <canvas id="map" width="820" height="480"></canvas>
+      <div class="legend">
+        <span><i class="dot moving"></i> moving</span>
+        <span><i class="dot idle"></i> idle</span>
+        <span><i class="dot blocked"></i> blocked</span>
+        <span><i class="dot charging"></i> charging</span>
+        <span><i class="dot anomaly"></i> anomalia di salute</span>
+        <span><i class="dot livelock"></i> livelock</span>
+        <span><i class="line choke"></i> corridoio a corsia singola</span>
+        <span><i class="line deadlock"></i> arco in deadlock</span>
+        <span><i class="dot synthetic"></i> anello tratteggiato = robot sintetico (generatore)</span>
+      </div>
+      <p class="hint">Un robot reale esiste solo sul grafo reale ("medium"): mentre e' attivo un run del generatore su un altro preset, i robot reali restano fuori dalla mappa (ma non dalla tabella qui sotto) per non mescolare due sistemi di coordinate diversi.</p>
+    </section>
+
+    <aside class="side-panel">
+      <section class="card">
+        <h2>Eventi recenti</h2>
+        <p class="hint">Deadlock/livelock rilevati in streaming (Passo 7), evidenziati anche sulla mappa per ~8s.</p>
+        <ul id="events-list"></ul>
+        <p id="events-empty" class="hint">Nessun evento comportamentale rilevato finora.</p>
+      </section>
+
+      <section class="card">
+        <h2>Robot a rischio</h2>
+        <p class="hint">Previsioni offline (regressione lineare), aggiornate ogni 5s.</p>
+        <table id="predictions-table">
+          <thead>
+            <tr><th>Robot</th><th>Canale</th><th>Valore</th><th>Soglia</th><th>Lead time</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <p id="predictions-empty" class="hint" hidden>Nessun robot con un trend a rischio al momento.</p>
+      </section>
+
+      <section class="card">
+        <h2>Chiedi ai dati</h2>
+        <p class="hint">Domanda in linguaggio naturale &rarr; Qwen-Coder genera SQL &rarr; eseguito su Spark SQL.</p>
+        <form id="tag-form">
+          <textarea id="tag-question" rows="2" placeholder="Es: quanti guasti sono stati iniettati per ogni robot?"></textarea>
+          <button type="submit">Chiedi</button>
+        </form>
+        <div id="tag-result"></div>
+      </section>
+    </aside>
+  </main>
+
+  <main class="bottom-row">
+    <section class="card fleet-table-card">
+      <h2>Tutti i robot</h2>
+      <p class="hint">Valori live da <code>fleet_state</code> (include anche i robot-token del generatore sintetico).</p>
+      <div class="table-scroll">
+        <table id="fleet-table">
+          <thead>
+            <tr>
+              <th>Robot</th><th>Stato</th><th>x</th><th>y</th>
+              <th>Batteria %</th><th>Corrente A</th><th>Temp &deg;C</th>
+              <th>Arco</th><th>Goal</th><th>Anomalia</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card generator-card">
+      <h2>Genera carico sintetico</h2>
+      <p class="hint">Pannello di controllo del generatore del Passo 12: avvia robot-token su un grafo a scelta, con guasti opzionali. Solo per test/carico, non tocca la simulazione ROS/Gazebo reale.</p>
+
+      <form id="generator-form">
+        <div class="form-row">
+          <label>Topologia
+            <select id="gen-preset">
+              <option value="small">Piccola (6 nodi)</option>
+              <option value="medium" selected>Media (grafo reale, 10 nodi)</option>
+              <option value="large">Grande (griglia 5x5, 25 nodi)</option>
+            </select>
+          </label>
+          <label>Numero robot
+            <input type="number" id="gen-num-robots" value="20" min="1" max="20000" />
+          </label>
+          <label>Hz per robot
+            <input type="number" id="gen-hz" value="2" min="0.1" max="50" step="0.1" />
+          </label>
+          <label>Durata (s)
+            <input type="number" id="gen-duration" value="60" min="1" max="3600" />
+          </label>
+        </div>
+
+        <div id="gen-faults-list"></div>
+        <button type="button" id="gen-add-fault">+ aggiungi guasto</button>
+
+        <div class="form-actions">
+          <button type="submit" id="gen-start-btn">Avvia</button>
+          <button type="button" id="gen-stop-btn" disabled>Ferma</button>
+        </div>
+      </form>
+
+      <div id="gen-status" class="hint">Nessun run in corso.</div>
+    </section>
+  </main>
+
+  <main class="eval-row">
+    <section class="card eval-card" id="eval-effectiveness-card">
+      <h2>Risultati sperimentazioni — effectiveness</h2>
+      <p class="hint">Ultimo run di <code>eval/run_effectiveness.py</code> (Passo 13): precision/recall della detection, accuratezza delle previsioni, execution accuracy del layer TAG. Aggiornato automaticamente ogni 30s.</p>
+      <div id="eval-effectiveness-body" class="eval-body">
+        <p class="hint">Nessun run ancora eseguito.</p>
+      </div>
+    </section>
+
+    <section class="card eval-card" id="eval-efficiency-card">
+      <h2>Risultati sperimentazioni — efficiency</h2>
+      <p class="hint">Ultimo run di <code>eval/run_efficiency.py</code> (Passo 13): throughput a carico crescente, latenza onset&rarr;alert.</p>
+      <div id="eval-efficiency-body" class="eval-body">
+        <p class="hint">Nessun run ancora eseguito.</p>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

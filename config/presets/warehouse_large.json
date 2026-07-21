@@ -1,0 +1,437 @@
+{
+  "description": "Preset 'grande' per il pannello di controllo del generatore sintetico (Passo 11, estensione): griglia 5x5 (25 nodi, 40 archi), utile per distribuire migliaia di robot-token su piu' percorsi durante lo sweep di scalabilita' (Passo 13). Riga e colonna centrali marcate capacity=1 come choke point. Non usato da ROS/Gazebo.",
+  "nodes": [
+    {
+      "id": "R0C0",
+      "x": 0,
+      "y": 0,
+      "kind": "dock"
+    },
+    {
+      "id": "R0C1",
+      "x": 10,
+      "y": 0,
+      "kind": "junction"
+    },
+    {
+      "id": "R0C2",
+      "x": 20,
+      "y": 0,
+      "kind": "junction"
+    },
+    {
+      "id": "R0C3",
+      "x": 30,
+      "y": 0,
+      "kind": "junction"
+    },
+    {
+      "id": "R0C4",
+      "x": 40,
+      "y": 0,
+      "kind": "dock"
+    },
+    {
+      "id": "R1C0",
+      "x": 0,
+      "y": 10,
+      "kind": "junction"
+    },
+    {
+      "id": "R1C1",
+      "x": 10,
+      "y": 10,
+      "kind": "junction"
+    },
+    {
+      "id": "R1C2",
+      "x": 20,
+      "y": 10,
+      "kind": "junction"
+    },
+    {
+      "id": "R1C3",
+      "x": 30,
+      "y": 10,
+      "kind": "junction"
+    },
+    {
+      "id": "R1C4",
+      "x": 40,
+      "y": 10,
+      "kind": "junction"
+    },
+    {
+      "id": "R2C0",
+      "x": 0,
+      "y": 20,
+      "kind": "junction"
+    },
+    {
+      "id": "R2C1",
+      "x": 10,
+      "y": 20,
+      "kind": "junction"
+    },
+    {
+      "id": "R2C2",
+      "x": 20,
+      "y": 20,
+      "kind": "charging"
+    },
+    {
+      "id": "R2C3",
+      "x": 30,
+      "y": 20,
+      "kind": "junction"
+    },
+    {
+      "id": "R2C4",
+      "x": 40,
+      "y": 20,
+      "kind": "junction"
+    },
+    {
+      "id": "R3C0",
+      "x": 0,
+      "y": 30,
+      "kind": "junction"
+    },
+    {
+      "id": "R3C1",
+      "x": 10,
+      "y": 30,
+      "kind": "junction"
+    },
+    {
+      "id": "R3C2",
+      "x": 20,
+      "y": 30,
+      "kind": "junction"
+    },
+    {
+      "id": "R3C3",
+      "x": 30,
+      "y": 30,
+      "kind": "junction"
+    },
+    {
+      "id": "R3C4",
+      "x": 40,
+      "y": 30,
+      "kind": "junction"
+    },
+    {
+      "id": "R4C0",
+      "x": 0,
+      "y": 40,
+      "kind": "dock"
+    },
+    {
+      "id": "R4C1",
+      "x": 10,
+      "y": 40,
+      "kind": "junction"
+    },
+    {
+      "id": "R4C2",
+      "x": 20,
+      "y": 40,
+      "kind": "junction"
+    },
+    {
+      "id": "R4C3",
+      "x": 30,
+      "y": 40,
+      "kind": "junction"
+    },
+    {
+      "id": "R4C4",
+      "x": 40,
+      "y": 40,
+      "kind": "dock"
+    }
+  ],
+  "edges": [
+    {
+      "id": "R0C0-R0C1",
+      "from": "R0C0",
+      "to": "R0C1",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R0C0-R1C0",
+      "from": "R0C0",
+      "to": "R1C0",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R0C1-R0C2",
+      "from": "R0C1",
+      "to": "R0C2",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R0C1-R1C1",
+      "from": "R0C1",
+      "to": "R1C1",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R0C2-R0C3",
+      "from": "R0C2",
+      "to": "R0C3",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R0C2-R1C2",
+      "from": "R0C2",
+      "to": "R1C2",
+      "capacity": 1,
+      "length": 10
+    },
+    {
+      "id": "R0C3-R0C4",
+      "from": "R0C3",
+      "to": "R0C4",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R0C3-R1C3",
+      "from": "R0C3",
+      "to": "R1C3",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R0C4-R1C4",
+      "from": "R0C4",
+      "to": "R1C4",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R1C0-R1C1",
+      "from": "R1C0",
+      "to": "R1C1",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R1C0-R2C0",
+      "from": "R1C0",
+      "to": "R2C0",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R1C1-R1C2",
+      "from": "R1C1",
+      "to": "R1C2",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R1C1-R2C1",
+      "from": "R1C1",
+      "to": "R2C1",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R1C2-R1C3",
+      "from": "R1C2",
+      "to": "R1C3",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R1C2-R2C2",
+      "from": "R1C2",
+      "to": "R2C2",
+      "capacity": 1,
+      "length": 10
+    },
+    {
+      "id": "R1C3-R1C4",
+      "from": "R1C3",
+      "to": "R1C4",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R1C3-R2C3",
+      "from": "R1C3",
+      "to": "R2C3",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R1C4-R2C4",
+      "from": "R1C4",
+      "to": "R2C4",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R2C0-R2C1",
+      "from": "R2C0",
+      "to": "R2C1",
+      "capacity": 1,
+      "length": 10
+    },
+    {
+      "id": "R2C0-R3C0",
+      "from": "R2C0",
+      "to": "R3C0",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R2C1-R2C2",
+      "from": "R2C1",
+      "to": "R2C2",
+      "capacity": 1,
+      "length": 10
+    },
+    {
+      "id": "R2C1-R3C1",
+      "from": "R2C1",
+      "to": "R3C1",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R2C2-R2C3",
+      "from": "R2C2",
+      "to": "R2C3",
+      "capacity": 1,
+      "length": 10
+    },
+    {
+      "id": "R2C2-R3C2",
+      "from": "R2C2",
+      "to": "R3C2",
+      "capacity": 1,
+      "length": 10
+    },
+    {
+      "id": "R2C3-R2C4",
+      "from": "R2C3",
+      "to": "R2C4",
+      "capacity": 1,
+      "length": 10
+    },
+    {
+      "id": "R2C3-R3C3",
+      "from": "R2C3",
+      "to": "R3C3",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R2C4-R3C4",
+      "from": "R2C4",
+      "to": "R3C4",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R3C0-R3C1",
+      "from": "R3C0",
+      "to": "R3C1",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R3C0-R4C0",
+      "from": "R3C0",
+      "to": "R4C0",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R3C1-R3C2",
+      "from": "R3C1",
+      "to": "R3C2",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R3C1-R4C1",
+      "from": "R3C1",
+      "to": "R4C1",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R3C2-R3C3",
+      "from": "R3C2",
+      "to": "R3C3",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R3C2-R4C2",
+      "from": "R3C2",
+      "to": "R4C2",
+      "capacity": 1,
+      "length": 10
+    },
+    {
+      "id": "R3C3-R3C4",
+      "from": "R3C3",
+      "to": "R3C4",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R3C3-R4C3",
+      "from": "R3C3",
+      "to": "R4C3",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R3C4-R4C4",
+      "from": "R3C4",
+      "to": "R4C4",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R4C0-R4C1",
+      "from": "R4C0",
+      "to": "R4C1",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R4C1-R4C2",
+      "from": "R4C1",
+      "to": "R4C2",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R4C2-R4C3",
+      "from": "R4C2",
+      "to": "R4C3",
+      "capacity": 2,
+      "length": 10
+    },
+    {
+      "id": "R4C3-R4C4",
+      "from": "R4C3",
+      "to": "R4C4",
+      "capacity": 2,
+      "length": 10
+    }
+  ]
+}

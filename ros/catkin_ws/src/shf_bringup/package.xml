@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>shf_bringup</name>
+  <version>0.1.0</version>
+  <description>Self Healing Fleet - bring-up di un singolo TurtleBot3 in Gazebo e navigazione nodo-per-nodo sul grafo del magazzino.</description>
+  <maintainer email="marcello.tascioni@gmail.com">Marcello Tascioni</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>actionlib</exec_depend>
+  <exec_depend>move_base_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>tf</exec_depend>
+  <exec_depend>move_base</exec_depend>
+  <exec_depend>dwa_local_planner</exec_depend>
+  <exec_depend>turtlebot3_gazebo</exec_depend>
+  <exec_depend>turtlebot3_navigation</exec_depend>
+</package>

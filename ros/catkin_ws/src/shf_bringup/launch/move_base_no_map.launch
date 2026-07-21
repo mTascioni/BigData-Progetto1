@@ -1,0 +1,43 @@
+<launch>
+  <!--
+    Variante di turtlebot3_navigation/launch/move_base.launch senza map_server/AMCL:
+    il Passo 3 e' un roadmap logico (config/warehouse_graph.json), non richiede una
+    mappa metrica delle pareti. Il global_costmap qui e' vuoto (nessun static_layer)
+    e vive nel frame "odom", su cui la simulazione e' accurata.
+
+    odom_frame/base_frame/base_scan_frame di default valgono per il caso
+    single-robot (Passo 3/4, nessun namespace). Nel multi-robot (Passo 5) il
+    launch chiamante passa i frame con prefisso "<robot_id>/..." perche' tf2
+    non applica automaticamente il namespace roslaunch ai frame_id: vanno
+    resi univoci esplicitamente, altrimenti i tf di piu' robot collidono
+    sullo stesso frame "odom"/"base_footprint" globale.
+  -->
+  <arg name="model" default="$(env TURTLEBOT3_MODEL)" doc="model type [burger, waffle, waffle_pi]"/>
+  <arg name="cmd_vel_topic" default="cmd_vel" />
+  <arg name="odom_topic" default="odom" />
+  <arg name="move_forward_only" default="false"/>
+  <arg name="odom_frame" default="odom"/>
+  <arg name="base_frame" default="base_footprint"/>
+  <arg name="base_scan_frame" default="base_scan"/>
+
+  <node pkg="move_base" type="move_base" respawn="false" name="move_base" output="screen">
+    <param name="base_local_planner" value="dwa_local_planner/DWAPlannerROS" />
+    <rosparam file="$(find turtlebot3_navigation)/param/costmap_common_params_$(arg model).yaml" command="load" ns="global_costmap" />
+    <rosparam file="$(find turtlebot3_navigation)/param/costmap_common_params_$(arg model).yaml" command="load" ns="local_costmap" />
+    <rosparam file="$(find turtlebot3_navigation)/param/local_costmap_params.yaml" command="load" />
+    <rosparam file="$(find shf_bringup)/config/global_costmap_no_map.yaml" command="load" />
+    <rosparam file="$(find turtlebot3_navigation)/param/move_base_params.yaml" command="load" />
+    <rosparam file="$(find turtlebot3_navigation)/param/dwa_local_planner_params_$(arg model).yaml" command="load" />
+
+    <param name="global_costmap/global_frame" value="$(arg odom_frame)" />
+    <param name="global_costmap/robot_base_frame" value="$(arg base_frame)" />
+    <param name="global_costmap/scan/sensor_frame" value="$(arg base_scan_frame)" />
+    <param name="local_costmap/global_frame" value="$(arg odom_frame)" />
+    <param name="local_costmap/robot_base_frame" value="$(arg base_frame)" />
+    <param name="local_costmap/scan/sensor_frame" value="$(arg base_scan_frame)" />
+
+    <remap from="cmd_vel" to="$(arg cmd_vel_topic)"/>
+    <remap from="odom" to="$(arg odom_topic)"/>
+    <param name="DWAPlannerROS/min_vel_x" value="0.0" if="$(arg move_forward_only)" />
+  </node>
+</launch>

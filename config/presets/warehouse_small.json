@@ -1,0 +1,20 @@
+{
+  "description": "Preset 'piccolo' per il pannello di controllo del generatore sintetico (Passo 11, estensione): un anello a 6 nodi con un solo corridoio a corsia singola (B-F) come choke point. Non usato da ROS/Gazebo (che resta sul grafo reale in config/warehouse_graph.json), solo dal generatore.",
+  "nodes": [
+    { "id": "A", "x": 0, "y": 0, "kind": "dock" },
+    { "id": "B", "x": 10, "y": 0, "kind": "junction" },
+    { "id": "C", "x": 15, "y": 8, "kind": "storage" },
+    { "id": "D", "x": 10, "y": 16, "kind": "storage" },
+    { "id": "E", "x": 0, "y": 16, "kind": "storage" },
+    { "id": "F", "x": -5, "y": 8, "kind": "junction" }
+  ],
+  "edges": [
+    { "id": "A-B", "from": "A", "to": "B", "capacity": 2, "length": 10 },
+    { "id": "B-C", "from": "B", "to": "C", "capacity": 2, "length": 10 },
+    { "id": "C-D", "from": "C", "to": "D", "capacity": 2, "length": 10 },
+    { "id": "D-E", "from": "D", "to": "E", "capacity": 2, "length": 10 },
+    { "id": "E-F", "from": "E", "to": "F", "capacity": 2, "length": 10 },
+    { "id": "F-A", "from": "F", "to": "A", "capacity": 2, "length": 10 },
+    { "id": "B-F", "from": "B", "to": "F", "capacity": 1, "length": 14 }
+  ]
+}

@@ -1,0 +1,120 @@
+{
+  "experiment_id": "exp-001-baseline",
+  "description": "Esperimento di riferimento: 3 robot sull'anello di storage del magazzino, uno scenario di deadlock e uno di livelock sui choke point C-F/C-H, e un fault_schedule con tutte e quattro le firme di guasto di salute. Questo file è anche la definizione dell'esperimento: gli stessi valori vanno usati per generare il ground truth in injected_faults.",
+  "warehouse_graph": "config/warehouse_graph.json",
+  "duration_s": 900,
+
+  "fleet": [
+    { "robot_id": "R1", "model": "burger", "start_node": "A" },
+    { "robot_id": "R2", "model": "burger", "start_node": "D" },
+    { "robot_id": "R3", "model": "burger", "start_node": "I" }
+  ],
+
+  "tasks": [
+    { "robot_id": "R1", "start_time_s": 0,  "goal_sequence": ["B", "C", "F", "G", "J", "H", "C", "B", "A"] },
+    { "robot_id": "R2", "start_time_s": 5,  "goal_sequence": ["C", "H", "J", "G", "F", "C", "D"] },
+    { "robot_id": "R3", "start_time_s": 10, "goal_sequence": ["B", "E", "F", "G"] }
+  ],
+
+  "scenarios": [
+    {
+      "scenario_id": "deadlock-1",
+      "type": "deadlock",
+      "involved_robots": ["R1", "R2"],
+      "involved_edges": ["C-F", "C-H"],
+      "trigger_time_s": 30,
+      "description": "R1 percorre l'anello in senso orario (C->F->G->J->H->C), R2 in senso antiorario (C->H->J->G->F->C): con i due archi a corsia singola (C-F, C-H) impegnati in direzioni opposte nello stesso intervallo, i due robot possono restare bloccati in attesa reciproca sui rispettivi archi contesi."
+    },
+    {
+      "scenario_id": "livelock-1",
+      "type": "livelock",
+      "involved_robots": ["R1", "R2"],
+      "involved_edges": ["C-F", "C-H"],
+      "trigger_time_s": 30,
+      "description": "Stessa geometria di deadlock-1; con una policy di priorità simmetrica i due robot possono cedersi il passo a vicenda senza mai attraversare il choke point, alternando ripetutamente stato 'blocked'/'moving' senza avanzare verso il goal."
+    }
+  ],
+
+  "health_channels_nominal": {
+    "battery_pct": {
+      "start_pct": 100.0,
+      "drain_rate_moving_pct_per_min": 0.5,
+      "drain_rate_idle_pct_per_min": 0.05,
+      "charge_rate_pct_per_min": 10.0
+    },
+    "motor_current": { "nominal_a": 1.5, "noise_std_a": 0.1 },
+    "motor_temp": { "nominal_c": 35.0, "noise_std_c": 1.0 }
+  },
+
+  "fault_signature_schema": {
+    "deriva_termica": {
+      "category": "salute",
+      "channel": "motor_temp",
+      "mechanism": "rampa lineare fino a un plateau",
+      "params": ["ramp_rate_c_per_s", "plateau_temp_c", "ramp_duration_s"]
+    },
+    "spike_corrente": {
+      "category": "salute",
+      "channel": "motor_current",
+      "mechanism": "picco che resta elevato per la durata del guasto",
+      "params": ["peak_a", "rise_time_s", "hold_duration_s"]
+    },
+    "batteria_collasso": {
+      "category": "salute",
+      "channel": "battery_pct",
+      "mechanism": "discesa più ripida del drain rate nominale",
+      "params": ["drain_rate_multiplier", "trigger_pct"]
+    },
+    "sensore_bloccato": {
+      "category": "salute",
+      "channel": "configurabile (frozen_channel)",
+      "mechanism": "valore congelato all'ultimo campione valido (freeze)",
+      "params": ["frozen_channel", "freeze_duration_s"]
+    },
+    "deadlock": {
+      "category": "comportamentale",
+      "mechanism": "attesa circolare su archi contesi",
+      "params": ["involved_robots", "involved_edges"]
+    },
+    "livelock": {
+      "category": "comportamentale",
+      "mechanism": "cessione reciproca del passo senza progresso verso il goal",
+      "params": ["involved_robots", "involved_edges"]
+    }
+  },
+
+  "fault_schedule": [
+    {
+      "fault_id": "F1",
+      "robot_id": "R3",
+      "fault_type": "deriva_termica",
+      "start_time_s": 120,
+      "end_time_s": 420,
+      "params": { "ramp_rate_c_per_s": 0.15, "plateau_temp_c": 85.0, "ramp_duration_s": 300 }
+    },
+    {
+      "fault_id": "F2",
+      "robot_id": "R1",
+      "fault_type": "spike_corrente",
+      "start_time_s": 200,
+      "end_time_s": 260,
+      "params": { "peak_a": 4.5, "rise_time_s": 5, "hold_duration_s": 55 }
+    },
+    {
+      "fault_id": "F3",
+      "robot_id": "R2",
+      "fault_type": "batteria_collasso",
+      "start_time_s": 300,
+      "end_time_s": 450,
+      "params": { "drain_rate_multiplier": 8.0, "trigger_pct": 60.0 }
+    },
+    {
+      "fault_id": "F4",
+      "robot_id": "R3",
+      "fault_type": "sensore_bloccato",
+      "start_time_s": 500,
+      "end_time_s": 560,
+      "params": { "frozen_channel": "min_obstacle_dist", "freeze_duration_s": 60 }
+    }
+  ]
+}

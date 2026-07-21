@@ -1,0 +1,54 @@
+"""Domande di riferimento per l'execution accuracy del layer TAG (Passo 10/13).
+
+Ogni voce ha una domanda in linguaggio naturale e una query SQL di
+"verita' diretta" scritta a mano: eseguita sugli stessi dati nello stesso
+momento della domanda al TAG, cosi' il confronto resta valido anche mentre
+lo storico cresce (nessun valore atteso hardcoded)."""
+
+REFERENCE_QUESTIONS = [
+    ("Quanti messaggi di telemetria ci sono in totale?",
+     "SELECT COUNT(*) AS n FROM telemetry"),
+    ("Quanti robot distinti hanno mandato telemetria?",
+     "SELECT COUNT(DISTINCT robot_id) AS n FROM telemetry"),
+    ("Qual e' la temperatura media dei motori per ogni robot?",
+     "SELECT robot_id, AVG(motor_temp) AS avg_temp FROM telemetry GROUP BY robot_id"),
+    ("Quante anomalie sono state rilevate per ciascun tipo?",
+     "SELECT type, COUNT(*) AS n FROM anomalies GROUP BY type"),
+    ("Quante anomalie di tipo salute sono state rilevate in totale?",
+     "SELECT COUNT(*) AS n FROM anomalies WHERE type = 'salute'"),
+    ("Su quanti robot distinti e' stata rilevata almeno un'anomalia di salute?",
+     "SELECT COUNT(DISTINCT robot_id) AS n FROM anomalies WHERE type = 'salute'"),
+    ("Quanti guasti sono stati iniettati per ogni tipo?",
+     "SELECT fault_type, COUNT(*) AS n FROM injected_faults GROUP BY fault_type"),
+    ("Quanti guasti sono stati iniettati per ogni robot?",
+     "SELECT robot_id, COUNT(*) AS n FROM injected_faults GROUP BY robot_id"),
+    ("Qual e' la durata media pianificata dei guasti iniettati, in secondi?",
+     "SELECT AVG(end_time_s - start_time_s) AS avg_duration_s FROM injected_faults"),
+    ("Qual e' la previsione di guasto con il lead time piu' basso?",
+     "SELECT robot_id, channel, lead_time_s FROM predictions ORDER BY lead_time_s ASC LIMIT 1"),
+    ("Su quanti robot distinti c'e' almeno una previsione di guasto?",
+     "SELECT COUNT(DISTINCT robot_id) AS n FROM predictions"),
+    ("Qual e' il valore medio corrente all'ultima previsione, per canale?",
+     "SELECT channel, AVG(current_value) AS avg_value FROM predictions GROUP BY channel"),
+    ("Quante anomalie di tipo livelock sono state rilevate?",
+     "SELECT COUNT(*) AS n FROM anomalies WHERE type = 'livelock'"),
+    ("Quante anomalie di tipo deadlock sono state rilevate?",
+     "SELECT COUNT(*) AS n FROM anomalies WHERE type = 'deadlock'"),
+    ("Qual e' il robot con piu' messaggi di telemetria?",
+     "SELECT robot_id, COUNT(*) AS n FROM telemetry GROUP BY robot_id ORDER BY n DESC LIMIT 1"),
+    ("Qual e' il tipo di guasto iniettato piu' frequente?",
+     "SELECT fault_type, COUNT(*) AS n FROM injected_faults GROUP BY fault_type ORDER BY n DESC LIMIT 1"),
+    ("Quante anomalie di salute sono dovute a motor_temp fuori soglia?",
+     "SELECT COUNT(*) AS n FROM anomalies WHERE type = 'salute' AND array_contains(threshold_reasons, 'motor_temp')"),
+    ("Quante anomalie di salute sono dovute a motor_current fuori soglia?",
+     "SELECT COUNT(*) AS n FROM anomalies WHERE type = 'salute' AND array_contains(threshold_reasons, 'motor_current')"),
+    ("Quante previsioni hanno un lead time inferiore a 5 minuti?",
+     "SELECT COUNT(*) AS n FROM predictions WHERE lead_time_s < 300"),
+    ("Per ogni robot con almeno un guasto iniettato, quanti guasti e qual e' la temperatura media?",
+     "SELECT f.robot_id, COUNT(*) AS n_faults, AVG(t.motor_temp) AS avg_temp "
+     "FROM injected_faults f JOIN telemetry t ON f.robot_id = t.robot_id GROUP BY f.robot_id"),
+    ("Qual e' la corrente media dei motori su tutta la flotta?",
+     "SELECT AVG(motor_current) AS avg_current FROM telemetry"),
+    ("Quanti tipi distinti di guasto sono stati usati negli esperimenti?",
+     "SELECT COUNT(DISTINCT fault_type) AS n FROM injected_faults"),
+]

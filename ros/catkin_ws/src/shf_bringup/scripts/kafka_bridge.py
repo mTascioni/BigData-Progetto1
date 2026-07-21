@@ -1,0 +1,323 @@
+#!/usr/bin/env python3
+"""Nodo-ponte ROS -> Kafka.
+
+Si sottoscrive ai topic ROS di un robot, compone il messaggio di telemetria
+nello schema condiviso (CLAUDE.md), sintetizzando i canali di salute
+(nominale + rumore) e mappando la posizione sull'arco del grafo piu' vicino.
+Pubblica su Kafka, topic `telemetry`, partizionato per robot_id (message key
+= robot_id). Applica anche il `fault_schedule` di config/experiment.json
+(layer di fault injection, Passo 6): quando un guasto e' attivo per questo
+robot, la sua firma viene sommata/applicata alla telemetria prima di
+pubblicare, e l'istanza del guasto (con i timestamp reali di
+attivazione/disattivazione) viene loggata sul topic `injected_faults` --
+ground truth per la valutazione del Passo 13.
+"""
+import json
+import math
+import os
+import random
+import time
+
+import rospy
+import tf.transformations
+from confluent_kafka import Producer
+from geometry_msgs.msg import Twist
+from move_base_msgs.msg import MoveBaseActionGoal, MoveBaseActionResult
+from nav_msgs.msg import Odometry
+from sensor_msgs.msg import LaserScan
+
+
+def load_config(config_dir):
+    with open(os.path.join(config_dir, "warehouse_graph.json")) as f:
+        graph = json.load(f)
+    with open(os.path.join(config_dir, "experiment.json")) as f:
+        experiment = json.load(f)
+    return graph, experiment
+
+
+def nearest_node(node_pos, x, y):
+    return min(node_pos, key=lambda n: math.hypot(node_pos[n][0] - x, node_pos[n][1] - y))
+
+
+def nearest_edge(edges, node_pos, x, y):
+    """Proietta (x, y) su ciascun arco (segmento tra i due nodi, clampato) e
+    restituisce l'id dell'arco con distanza minima -- '(x,y) mappato
+    sull'arco occupato', invariante di CLAUDE.md."""
+    best_id, best_dist = None, float("inf")
+    for e in edges:
+        x1, y1 = node_pos[e["from"]]
+        x2, y2 = node_pos[e["to"]]
+        dx, dy = x2 - x1, y2 - y1
+        seg_len_sq = dx * dx + dy * dy
+        if seg_len_sq == 0:
+            t = 0.0
+        else:
+            t = max(0.0, min(1.0, ((x - x1) * dx + (y - y1) * dy) / seg_len_sq))
+        px, py = x1 + t * dx, y1 + t * dy
+        dist = math.hypot(x - px, y - py)
+        if dist < best_dist:
+            best_id, best_dist = e["id"], dist
+    return best_id
+
+
+class FaultInjector:
+    """Applica il `fault_schedule` di config/experiment.json alla telemetria
+    di un robot e logga ogni istanza di guasto (start/end reali) sul topic
+    Kafka `injected_faults`.
+
+    Le finestre `start_time_s`/`end_time_s` dello schedule sono relative
+    all'avvio della simulazione (stesso riferimento usato da
+    graph_navigator.py per `start_time_s` dei task): `t0` e' il wall-clock
+    al momento in cui questo nodo e' partito.
+    """
+
+    def __init__(self, robot_id, fault_schedule, producer, t0, get_live_value):
+        self.robot_id = robot_id
+        self.schedule = {f["fault_id"]: f for f in fault_schedule if f["robot_id"] == robot_id}
+        self.producer = producer
+        self.t0 = t0
+        self.get_live_value = get_live_value  # channel(str) -> valore corrente non-faultato
+        self.active = {}  # fault_id -> {"start_wall_ts": ms, "frozen_value": ...}
+
+    def _elapsed(self):
+        return time.time() - self.t0
+
+    def update_battery_multiplier(self):
+        """Fase 1: PRIMA di aggiornare battery_pct nel tick. Gestisce
+        attivazione/disattivazione di tutti i guasti (incluso il logging su
+        injected_faults) e ritorna il moltiplicatore di drain batteria da
+        usare in questo tick (1.0 se nessun guasto batteria e' attivo)."""
+        elapsed = self._elapsed()
+        battery_multiplier = 1.0
+
+        for fault_id, fault in self.schedule.items():
+            is_active = fault["start_time_s"] <= elapsed <= fault["end_time_s"]
+            was_active = fault_id in self.active
+
+            if is_active and not was_active:
+                self._activate(fault)
+            elif not is_active and was_active:
+                self._deactivate(fault)
+
+            if is_active and fault["fault_type"] == "batteria_collasso":
+                battery_multiplier = fault["params"]["drain_rate_multiplier"]
+
+        return battery_multiplier
+
+    def apply_to_message(self, message):
+        """Fase 2: DOPO aver costruito il dict di telemetria nominale
+        (incluso battery_pct gia' aggiornato). Somma/applica la firma dei
+        guasti di salute attivi diversi da batteria_collasso (gia' gestita
+        in update_battery_multiplier)."""
+        elapsed = self._elapsed()
+        for fault_id, fault in self.schedule.items():
+            if fault_id not in self.active:
+                continue
+            ftype = fault["fault_type"]
+            p = fault["params"]
+            elapsed_in_fault = elapsed - fault["start_time_s"]
+
+            if ftype == "deriva_termica":
+                ramped = message["motor_temp"] + p["ramp_rate_c_per_s"] * elapsed_in_fault
+                message["motor_temp"] = round(min(p["plateau_temp_c"], ramped), 2)
+
+            elif ftype == "spike_corrente":
+                if elapsed_in_fault < p["rise_time_s"]:
+                    value = message["motor_current"] + (p["peak_a"] - message["motor_current"]) * (
+                        elapsed_in_fault / p["rise_time_s"]
+                    )
+                else:
+                    value = p["peak_a"]
+                message["motor_current"] = round(value, 3)
+
+            elif ftype == "sensore_bloccato":
+                message[p["frozen_channel"]] = self.active[fault_id]["frozen_value"]
+
+    def flush_active(self):
+        """Chiude come `injected_faults` anche i guasti ancora attivi se il
+        nodo si ferma prima della fine naturale del guasto (best-effort)."""
+        for fault_id in list(self.active):
+            self._deactivate(self.schedule[fault_id])
+
+    def _activate(self, fault):
+        fault_id = fault["fault_id"]
+        rospy.loginfo("%s: guasto '%s' (%s) ATTIVATO", self.robot_id, fault_id, fault["fault_type"])
+        entry = {"start_wall_ts": int(time.time() * 1000)}
+        if fault["fault_type"] == "sensore_bloccato":
+            entry["frozen_value"] = self.get_live_value(fault["params"]["frozen_channel"])
+        self.active[fault_id] = entry
+
+    def _deactivate(self, fault):
+        fault_id = fault["fault_id"]
+        entry = self.active.pop(fault_id)
+        rospy.loginfo("%s: guasto '%s' (%s) disattivato", self.robot_id, fault_id, fault["fault_type"])
+        record = {
+            "fault_id": fault_id,
+            "robot_id": self.robot_id,
+            "fault_type": fault["fault_type"],
+            "start_time_s": fault["start_time_s"],
+            "end_time_s": fault["end_time_s"],
+            "params": fault["params"],
+            "start_ts": entry["start_wall_ts"],
+            "end_ts": int(time.time() * 1000),
+        }
+        self.producer.produce(
+            "injected_faults",
+            key=self.robot_id.encode("utf-8"),
+            value=json.dumps(record).encode("utf-8"),
+        )
+        self.producer.poll(0)
+
+
+class KafkaBridge:
+    VEL_EPS = 0.02          # m/s, sotto questa soglia il robot e' considerato fermo
+    BLOCKED_AFTER_S = 5.0   # fermo con un goal attivo per piu' di N secondi -> "blocked"
+    CHARGING_RADIUS_M = 0.5
+
+    def __init__(self):
+        self.robot_id = rospy.get_param("~robot_id", "R1")
+        config_dir = rospy.get_param("~config_dir", "/workspace/config")
+        kafka_bootstrap = rospy.get_param("~kafka_bootstrap", "kafka:9092")
+        self.publish_hz = rospy.get_param("~publish_hz", 2.0)
+
+        graph, experiment = load_config(config_dir)
+        self.node_pos = {n["id"]: (n["x"], n["y"]) for n in graph["nodes"]}
+        self.node_kind = {n["id"]: n["kind"] for n in graph["nodes"]}
+        self.edges = graph["edges"]
+        self.charging_nodes = [n for n, k in self.node_kind.items() if k == "charging"]
+
+        health = experiment["health_channels_nominal"]
+        self.battery_cfg = health["battery_pct"]
+        self.current_cfg = health["motor_current"]
+        self.temp_cfg = health["motor_temp"]
+        self.battery_pct = self.battery_cfg["start_pct"]
+
+        self.x = self.y = self.theta = 0.0
+        self.v_lin = self.v_ang = 0.0
+        self.cmd_v_lin = self.cmd_v_ang = 0.0
+        self.min_obstacle_dist = None
+
+        self.producer = Producer({"bootstrap.servers": kafka_bootstrap})
+        self.fault_injector = FaultInjector(
+            self.robot_id, experiment["fault_schedule"], self.producer, time.time(),
+            get_live_value=lambda channel: getattr(self, channel),
+        )
+        self.have_active_goal = False
+        self.goal_node = None
+        self.last_moving_time = rospy.get_time()
+        self._last_tick = rospy.get_time()
+
+        rospy.Subscriber("odom", Odometry, self._on_odom, queue_size=10)
+        rospy.Subscriber("cmd_vel", Twist, self._on_cmd_vel, queue_size=10)
+        rospy.Subscriber("scan", LaserScan, self._on_scan, queue_size=5)
+        rospy.Subscriber("move_base/goal", MoveBaseActionGoal, self._on_goal, queue_size=5)
+        rospy.Subscriber("move_base/result", MoveBaseActionResult, self._on_result, queue_size=5)
+
+    def _on_odom(self, msg):
+        p = msg.pose.pose.position
+        q = msg.pose.pose.orientation
+        self.x, self.y = p.x, p.y
+        _, _, self.theta = tf.transformations.euler_from_quaternion([q.x, q.y, q.z, q.w])
+        self.v_lin = msg.twist.twist.linear.x
+        self.v_ang = msg.twist.twist.angular.z
+        if abs(self.v_lin) > self.VEL_EPS or abs(self.v_ang) > self.VEL_EPS:
+            self.last_moving_time = rospy.get_time()
+
+    def _on_cmd_vel(self, msg):
+        self.cmd_v_lin = msg.linear.x
+        self.cmd_v_ang = msg.angular.z
+
+    def _on_scan(self, msg):
+        valid = [r for r in msg.ranges if msg.range_min <= r <= msg.range_max]
+        self.min_obstacle_dist = min(valid) if valid else msg.range_max
+
+    def _on_goal(self, msg):
+        gx = msg.goal.target_pose.pose.position.x
+        gy = msg.goal.target_pose.pose.position.y
+        self.goal_node = nearest_node(self.node_pos, gx, gy)
+        self.have_active_goal = True
+        self.last_moving_time = rospy.get_time()
+
+    def _on_result(self, _msg):
+        self.have_active_goal = False
+
+    def _task_state(self):
+        if not self.have_active_goal:
+            near_charger = any(
+                math.hypot(self.x - self.node_pos[n][0], self.y - self.node_pos[n][1]) < self.CHARGING_RADIUS_M
+                for n in self.charging_nodes
+            )
+            return "charging" if near_charger else "idle"
+        stalled = (rospy.get_time() - self.last_moving_time) > self.BLOCKED_AFTER_S
+        return "blocked" if stalled else "moving"
+
+    def _update_battery(self, task_state, dt_s, fault_multiplier):
+        dt_min = dt_s / 60.0
+        if task_state == "charging":
+            rate = self.battery_cfg["charge_rate_pct_per_min"]
+            self.battery_pct = min(100.0, self.battery_pct + rate * dt_min)
+        else:
+            # idle/blocked usano il rate a riposo, moving quello in movimento;
+            # un guasto batteria_collasso attivo moltiplica il drain (non la
+            # carica: la firma modella un collasso, non influenza la ricarica).
+            key = "drain_rate_moving_pct_per_min" if task_state == "moving" else "drain_rate_idle_pct_per_min"
+            rate = self.battery_cfg[key] * fault_multiplier
+            self.battery_pct = max(0.0, self.battery_pct - rate * dt_min)
+
+    def _kafka_error_cb(self, err, _msg):
+        if err is not None:
+            rospy.logwarn("%s: errore delivery Kafka: %s", self.robot_id, err)
+
+    def spin(self):
+        rate = rospy.Rate(self.publish_hz)
+        while not rospy.is_shutdown():
+            now = rospy.get_time()
+            dt_s = max(0.0, now - self._last_tick)
+            self._last_tick = now
+
+            task_state = self._task_state()
+            fault_multiplier = self.fault_injector.update_battery_multiplier()
+            self._update_battery(task_state, dt_s, fault_multiplier)
+
+            message = {
+                "ts": int(time.time() * 1000),
+                "robot_id": self.robot_id,
+                "x": round(self.x, 4),
+                "y": round(self.y, 4),
+                "theta": round(self.theta, 4),
+                "v_lin": round(self.v_lin, 4),
+                "v_ang": round(self.v_ang, 4),
+                "cmd_v_lin": round(self.cmd_v_lin, 4),
+                "cmd_v_ang": round(self.cmd_v_ang, 4),
+                "battery_pct": round(self.battery_pct, 2),
+                "motor_current": round(random.gauss(self.current_cfg["nominal_a"], self.current_cfg["noise_std_a"]), 3),
+                "motor_temp": round(random.gauss(self.temp_cfg["nominal_c"], self.temp_cfg["noise_std_c"]), 2),
+                "min_obstacle_dist": round(self.min_obstacle_dist, 3) if self.min_obstacle_dist is not None else None,
+                "task_state": task_state,
+                "current_edge": nearest_edge(self.edges, self.node_pos, self.x, self.y),
+                "goal_node": self.goal_node,
+            }
+
+            self.fault_injector.apply_to_message(message)
+
+            self.producer.produce(
+                "telemetry",
+                key=self.robot_id.encode("utf-8"),
+                value=json.dumps(message).encode("utf-8"),
+                callback=self._kafka_error_cb,
+            )
+            self.producer.poll(0)
+
+            rate.sleep()
+
+        self.fault_injector.flush_active()
+        self.producer.flush(5)
+
+
+def main():
+    rospy.init_node("kafka_bridge")
+    KafkaBridge().spin()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,15 @@
+{
+  "name": "self-healing-fleet-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "kafkajs": "^2.2.4",
+    "ws": "^8.18.0"
+  }
+}
