@@ -24,7 +24,7 @@ docs/passi/               # documentazione dettagliata di ogni passo del piano (
 ## Prerequisiti
 
 - Docker + Docker Compose
-- Almeno ~4 core e 8GB di RAM liberi (Gazebo + Spark insieme sono pesanti; con meno risorse tutto funziona ma più lentamente)
+- Almeno ~6 core e 12GB di RAM liberi per la flotta reale (Gazebo + Kafka + due cluster Spark insieme sono pesanti — misurato: ~2GB per lo Spark master, ~2-4GB per lo worker, ~1GB per Gazebo con 4 robot, escluso il resto dello stack; con meno risorse tutto funziona ma la dashboard può risultare a scatti, vedi `docs/passi/11-dashboard.md`). Il generatore sintetico da solo (senza la flotta ROS reale) è molto più leggero.
 - Un token API di Hugging Face (gratuito), solo per il layer TAG (domande in linguaggio naturale) — il resto della pipeline funziona anche senza
 
 ## Scaricare il progetto

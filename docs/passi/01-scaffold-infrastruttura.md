@@ -105,6 +105,14 @@ Realizzato riusando `fleet_control_service.py` (già presente dal Passo 14) inve
 
 **Verificato**: stato iniziale `STOPPED` dopo boot pulito; avvio con `scale=small` (~16s, il tempo di `startsecs` di supervisord) → 4 robot reali (R1-R4) compaiono in `/api/fleet`; un secondo avvio mentre già in corso → `409`; stop → i robot spariscono; avvio con `scale=large` → tutti e 8 i robot (R1-R8) compaiono entro la finestra di boot naturale di Gazebo.
 
+## Correzione (2026-07-21): detection_job.py/query_service.py senza retry all'avvio
+
+Segnalato indirettamente dall'utente ("la simulazione parte molto in ritardo"), diagnosticato scaricando e riavviando l'intero stack più volte per riprodurlo. **Causa reale**: `streaming/start-master.sh` attende che il master Spark risponda su `:8080` prima di lanciare `query_service.py`/`detection_job.py`, ma non aspetta (né ritenta) che **Kafka** sia davvero pronto — a differenza dei consumer Node del backend (`fleetStateStore.js`/`anomalyStream.js`, già corretti per lo stesso motivo in un aggiornamento precedente), questi due `spark-submit` falliscono UNA VOLTA SOLA con `UnknownTopicOrPartitionException` se Kafka non è ancora pronto, e restano morti per sempre: Gazebo/ROS continuano a funzionare normalmente, ma `fleet_state` non viene mai scritto — sulla dashboard sembra che "la simulazione non parta", quando in realtà è la pipeline di detection che non è mai partita per davvero.
+
+**Fix**: ciascuno dei due `spark-submit` è ora avviato dentro un ciclo `while true; do ...; sleep 5; done` in una subshell — se il processo termina (per qualunque motivo), riparte da solo dopo 5s. Trovato e corretto un bug nel fix stesso durante la verifica: `set -e` (in cima allo script) si propaga nelle subshell e le uccide al primo fallimento, **prima** che possano ritentare — serve un `set +e` esplicito dentro ciascuna subshell.
+
+**Verificato**: riavvio pulito dell'intero stack più volte, osservato il crash iniziale (riproducibile, dipende dalla velocità con cui Kafka diventa pronto) seguito dal retry automatico e dalla ripresa entro pochi secondi; verificato anche forzando un crash a mano (`kill -9` sul processo) — riparte da solo. Vedi anche `docs/passi/11-dashboard.md` per il problema collegato (allocazione core di `detection_job.py` troppo alta per la flotta reale, causa della "lentezza a scatti" osservata anche dopo che la pipeline parte).
+
 ## Prossimo passo
 
 Passo 2 — Contratti dati: `config/warehouse_graph.json` e `config/experiment.json`, fissando lo schema del messaggio di telemetria già definito in `CLAUDE.md`.

@@ -118,8 +118,9 @@
     <li>1. Obiettivi del progetto
       <ol>
         <li>1.1 Contesto e vincoli del corso</li>
-        <li>1.2 Obiettivi funzionali</li>
-        <li>1.3 Un progetto di Big Data, non di robotica</li>
+        <li>1.2 Il problema iniziale: la mappa del magazzino come grafo</li>
+        <li>1.3 Obiettivi funzionali</li>
+        <li>1.4 Un progetto di Big Data, non di robotica</li>
       </ol>
     </li>
     <li>2. Architettura e tecnologie utilizzate
@@ -144,8 +145,9 @@
       <ol>
         <li>3.1 Effectiveness: precisione della detection, della previsione e del TAG</li>
         <li>3.2 Efficiency: scalabilità e latenza</li>
-        <li>3.3 Verifica end-to-end sulla flotta reale</li>
-        <li>3.4 Copertura dei requisiti del corso</li>
+        <li>3.3 Valutazione sulla scalabilità</li>
+        <li>3.4 Verifica end-to-end sulla flotta reale</li>
+        <li>3.5 Copertura dei requisiti del corso</li>
       </ol>
     </li>
     <li>4. Osservazioni conclusive
@@ -164,7 +166,45 @@
 <p>Il progetto è stato sviluppato per il corso di Big Data, in relazione al <b>Topic 7 — IoT Stream Analytics</b>. Il tema scelto è la gestione di una flotta di AGV (Automated Guided Vehicle) in un magazzino: i veicoli percorrono una mappa a grafo trasportando merci, inviando in continuo la propria telemetria (posizione, velocità, stato dei task, canali di salute del motore/batteria). Il sistema deve ingerire questo flusso continuo, rilevarne le anomalie in tempo reale, prevederne i guasti su base storica, e rispondere a interrogazioni in linguaggio naturale.</p>
 <p>Il vincolo di fondo, esplicitato fin dall'inizio nella documentazione di progetto, è che si tratta di <b>un progetto di Big Data, non di robotica</b>: il robot è unicamente la sorgente del flusso dati. Le tre "V" classiche sono tutte presenti nel disegno del sistema — <i>Volume</i> (il generatore sintetico permette di scalare da poche unità a migliaia di sorgenti simulate), <i>Velocity</i> (ingestion e detection in streaming, non batch), <i>Veracity</i> (dati fisicamente realistici, con rumore e vincoli reali imposti da un simulatore fisico, non generati "a tavolino") — a cui si aggiunge <i>Value</i>, dato dal layer di analisi predittiva che trasforma lo storico grezzo in previsioni azionabili.</p>
 
-<h3>1.2 Obiettivi funzionali</h3>
+<h3>1.2 Il problema iniziale: la mappa del magazzino come grafo</h3>
+<p>Prima ancora di parlare di dati o di pipeline, il progetto richiede di rispondere a una domanda di modellazione: <b>come si rappresenta un magazzino per una flotta di AGV?</b> La risposta standard nella logistica robotica — adottata anche qui — è un <b>grafo roadmap</b>: non una mappa metrica continua (che richiederebbe SLAM, irrilevante per gli scopi del progetto, §1.4), ma un insieme discreto di <i>nodi</i> (punti significativi: incroci, banchine di carico, scaffalature, stazioni di ricarica) collegati da <i>archi</i> (i percorsi realmente disponibili fra loro). Un robot non "naviga liberamente": sceglie una sequenza di nodi da raggiungere ed è il pianificatore locale (§2.2) a occuparsi di come muoversi lungo ciascun arco.</p>
+<p>Questa scelta di modellazione ha una conseguenza diretta sul problema di Big Data: se ogni arco può ospitare al più un certo numero di robot contemporaneamente (il suo <code>capacity</code>), un arco con <code>capacity=1</code> è un <b>corridoio a corsia singola</b> — un vincolo fisico reale che due robot possono violare solo restando bloccati in attesa reciproca (deadlock) o cedendosi il passo all'infinito senza avanzare (livelock). Questi due corridoi a capacità singola non sono un dettaglio implementativo: sono il meccanismo scelto <i>di proposito</i> per generare, in modo controllato e riproducibile, gli scenari comportamentali che il sistema deve rilevare (§2.6, tabella di verità in §3.1).</p>
+
+<div class="diagram">
+<svg viewBox="0 0 480 320" width="100%" style="max-width:420pt; display:block; margin:0 auto;" role="img" aria-label="Grafo del magazzino: 10 nodi, due choke point a corsia singola">
+  <line x1="40" y1="160" x2="173.3" y2="160" stroke="#5c6b82" stroke-width="2"/>
+  <line x1="173.3" y1="160" x2="306.7" y2="160" stroke="#5c6b82" stroke-width="2"/>
+  <line x1="306.7" y1="160" x2="440" y2="160" stroke="#5c6b82" stroke-width="2"/>
+  <line x1="173.3" y1="160" x2="173.3" y2="280" stroke="#5c6b82" stroke-width="2"/>
+  <line x1="173.3" y1="160" x2="173.3" y2="40" stroke="#5c6b82" stroke-width="2"/>
+  <line x1="173.3" y1="40" x2="306.7" y2="40" stroke="#5c6b82" stroke-width="2"/>
+  <line x1="306.7" y1="40" x2="440" y2="40" stroke="#5c6b82" stroke-width="2"/>
+  <line x1="306.7" y1="280" x2="440" y2="280" stroke="#5c6b82" stroke-width="2"/>
+  <line x1="440" y1="40" x2="440" y2="280" stroke="#5c6b82" stroke-width="2"/>
+  <line x1="306.7" y1="160" x2="306.7" y2="40" stroke="#c0392b" stroke-width="3" stroke-dasharray="7,5"/>
+  <line x1="306.7" y1="160" x2="306.7" y2="280" stroke="#c0392b" stroke-width="3" stroke-dasharray="7,5"/>
+
+  <g font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="600">
+    <circle cx="40" cy="160" r="7" fill="#2b6cb0"/><text x="40" y="182" text-anchor="middle">A</text>
+    <circle cx="173.3" cy="160" r="7" fill="#5c6b82"/><text x="173.3" y="182" text-anchor="middle">B</text>
+    <circle cx="306.7" cy="160" r="7" fill="#5c6b82"/><text x="306.7" y="182" text-anchor="middle">C</text>
+    <circle cx="440" cy="160" r="7" fill="#2b6cb0"/><text x="424" y="182" text-anchor="middle">D</text>
+    <circle cx="173.3" cy="40" r="7" fill="#4c8a3f"/><text x="173.3" y="26" text-anchor="middle">E</text>
+    <circle cx="306.7" cy="40" r="7" fill="#4c8a3f"/><text x="306.7" y="26" text-anchor="middle">F</text>
+    <circle cx="440" cy="40" r="7" fill="#4c8a3f"/><text x="424" y="26" text-anchor="middle">G</text>
+    <circle cx="306.7" cy="280" r="7" fill="#4c8a3f"/><text x="306.7" y="302" text-anchor="middle">H</text>
+    <circle cx="173.3" cy="280" r="7" fill="#c07a1f"/><text x="173.3" y="302" text-anchor="middle">I</text>
+    <circle cx="440" cy="280" r="7" fill="#4c8a3f"/><text x="424" y="302" text-anchor="middle">J</text>
+  </g>
+</svg>
+<div class="fig-caption">
+Fig. 0 — Il grafo del magazzino (<code>config/warehouse_graph.json</code>): 10 nodi, 11 archi. Legenda nodi — <span style="color:#2b6cb0;">●</span> dock (A, D), <span style="color:#5c6b82;">●</span> incrocio (B, C), <span style="color:#4c8a3f;">●</span> storage (E, F, G, H, J), <span style="color:#c07a1f;">●</span> ricarica (I). Archi grigi = corsia doppia (<code>capacity=2</code>); archi rossi tratteggiati (C–F, C–H) = <b>corsia singola</b> (<code>capacity=1</code>), i due choke point che rendono possibili deadlock/livelock sull'anello di storage F–G–J–H.
+</div>
+</div>
+
+<p>Nel messaggio di telemetria (schema completo in §2.3) questo grafo si riflette in due campi: <code>current_edge</code> (su quale arco si trova il robot in questo istante, calcolato proiettando la posizione fisica <code>(x, y)</code> sull'arco più vicino) e <code>goal_node</code> (il prossimo nodo della sequenza assegnata). È lo stesso identico grafo — stesso file, stesse coordinate — a essere: la roadmap che i robot seguono in Gazebo (§2.2), i vincoli di traffico che il job di detection sorveglia (§2.6), e ciò che la dashboard disegna a video (§2.10, con lo stesso layout della Fig. 0). Un'unica fonte di verità, non tre rappresentazioni da tenere sincronizzate a mano.</p>
+
+<h3>1.3 Obiettivi funzionali</h3>
 <ol>
   <li><b>Ingestion continua e realistica.</b> La sorgente dati doveva essere una vera pipeline ROS + Gazebo + TurtleBot3, non un generatore puramente sintetico fin dal principio — requisito esplicito del progetto per garantire dati con vincoli fisici reali (odometria, lidar, dinamica del robot), non solo formalmente conformi allo schema.</li>
   <li><b>Detection in tempo reale</b> di due categorie di anomalie: anomalie di <i>salute</i> (derive termiche, picchi di corrente, collasso della batteria, sensori bloccati) e anomalie <i>comportamentali</i> (deadlock e livelock su corridoi a corsia singola).</li>
@@ -175,7 +215,7 @@
   <li><b>Valutazione sperimentale</b> quantitativa, sia di <i>effectiveness</i> (precisione della detection e delle previsioni, accuratezza del TAG) sia di <i>efficiency</i> (scalabilità del throughput, latenza end-to-end), con un meccanismo di ground truth (`injected_faults`) che rende le metriche calcolabili in modo oggettivo, non stimato.</li>
 </ol>
 
-<h3>1.3 Un progetto di Big Data, non di robotica</h3>
+<h3>1.4 Un progetto di Big Data, non di robotica</h3>
 <p>Questo vincolo ha guidato diverse scelte architetturali documentate nel seguito: la navigazione dei robot non usa SLAM/mappa statica (irrilevante per gli obiettivi del progetto, il grafo del magazzino è già una roadmap nota); i canali di salute (temperatura motore, corrente, percentuale batteria) non esistono nel TurtleBot3 simulato e vengono <i>sintetizzati</i> nel nodo-ponte ROS→Kafka a partire da parametri nominali configurabili; l'iniezione dei guasti avviene sommando una firma parametrica alla telemetria realistica, non generando dati fittizi da zero. In un'estensione realizzata oltre il piano originale (§2.11), è stata anche introdotta un'unica, dichiarata eccezione a questo principio: per la sola flotta reale, un'anomalia di salute rilevata chiude l'anello con un'azione minima (invio verso un nodo di riparazione) — la decisione applicativa resta comunque nel backend, non nel robot.</p>
 
 <h2>2. Architettura e tecnologie utilizzate</h2>
@@ -267,12 +307,20 @@
 <p>La mappa del magazzino (<code>config/warehouse_graph.json</code>) è un grafo con nodi (id, coordinate, tipo) e archi (id, estremi, capacità, lunghezza); i robot la seguono come roadmap, e la posizione viene mappata sull'arco occupato. Un secondo file, <code>config/experiment.json</code>, definisce la flotta, i percorsi (<code>goal_sequence</code> per robot), gli scenari di conflitto e il <code>fault_schedule</code> — quest'ultimo è anche, letteralmente, la <b>ground truth</b> usata per calcolare precision/recall nella valutazione sperimentale (§3).</p>
 
 <h3>2.4 Ingestion: Apache Kafka</h3>
-<p>Un singolo broker Kafka in modalità KRaft (senza Zookeeper, <code>apache/kafka:3.7.0</code>) fa da spina dorsale dell'ingestion. Quattro topic principali:</p>
+<p>Un singolo broker Kafka fa da spina dorsale dell'ingestion. Quattro topic principali:</p>
 <ul>
-  <li><code>telemetry</code> — un messaggio per tick per robot, partizionato per <code>robot_id</code> (3 partizioni): garantisce l'ordinamento per singolo robot mantenendo il parallelismo fra robot diversi.</li>
+  <li><code>telemetry</code> — un messaggio per tick per robot, con chiave di produzione <code>robot_id</code>: garantisce che i messaggi dello stesso robot siano sempre consegnati nell'ordine in cui sono stati prodotti (proprietà che Kafka garantisce <i>per chiave</i>, non globalmente).</li>
   <li><code>injected_faults</code> — un record per ogni guasto iniettato (inizio/fine reali, parametri) — la ground truth sperimentale.</li>
   <li><code>anomalies</code> — un evento per ogni anomalia rilevata dal job di detection (salute, deadlock, livelock).</li>
   <li><code>fleet_state</code> — lo stato arricchito di ciascun robot ad ogni tick (telemetria + flag di anomalia), consumato in tempo reale dalla dashboard.</li>
+</ul>
+
+<h4>Scelte implementative e perché</h4>
+<ul>
+  <li><b>KRaft, non Zookeeper.</b> Il broker (<code>apache/kafka:3.7.0</code>) gira in modalità KRaft (<code>KAFKA_PROCESS_ROLES=broker,controller</code> sullo stesso nodo, <code>CLUSTER_ID</code> fisso): Zookeeper è ormai il percorso deprecato per nuovi cluster Kafka, e per un singolo broker locale KRaft elimina un intero servizio da orchestrare senza perdere nulla di rilevante per questo progetto (replica/quorum multi-nodo non sono un requisito qui).</li>
+  <li><b>Chiave di produzione <code>robot_id</code>, non round-robin.</b> Scelta esplicita per due motivi: garantisce l'ordinamento causale dei messaggi di uno stesso robot (rilevante per la detection, che ragiona su sequenze temporali per robot — es. il rilevatore di livelock, §2.6), e predispone il sistema a scalare orizzontalmente aumentando il numero di partizioni in futuro, senza dover cambiare né i producer (<code>kafka_bridge.py</code>, il generatore sintetico) né i consumer.</li>
+  <li><b>Un solo broker, una sola partizione per topic nella configurazione attuale.</b> Va detto con la stessa onestà con cui è dichiarato altrove in questo documento (§4.2): nessuno script del progetto crea esplicitamente i topic con un numero di partizioni maggiore di 1, quindi Kafka li crea automaticamente con il default del broker (1 partizione). La scelta della chiave <code>robot_id</code> resta corretta e utile — l'ordinamento per robot è comunque garantito, ed è la premessa necessaria per poter aumentare le partizioni senza modificare il codice — ma il parallelismo di lettura fra robot diversi che una partizione singola per robot avrebbe permesso <b>non è ancora sfruttato</b> in questa configurazione. Con il volume reale del progetto (poche decine di messaggi al secondo dalla flotta ROS, fino a decine di migliaia dal generatore sintetico, §2.5) un singolo broker a partizione singola non è mai risultato il collo di bottiglia negli esperimenti di efficiency (§3.2) — il limite osservato è altrove (il generatore stesso, o la CPU condivisa fra Spark e Gazebo, §3.3) — ma è un margine di scalabilità orizzontale lasciato deliberatamente sul tavolo, non sfruttato perché non necessario finora.</li>
+  <li><b>Nessun limite di risorse (CPU/RAM) impostato su nessun container</b> in <code>docker-compose.yml</code>, Kafka incluso: scelta pragmatica per un ambiente di sviluppo/demo su una singola macchina, dove i container competono liberamente per le risorse dell'host — rilevante anche per la discussione sulla scalabilità in §3.3.</li>
 </ul>
 
 <h3>2.5 Generatore sintetico per lo sweep di scalabilità</h3>
@@ -288,6 +336,7 @@
   <li><b>Isolation Forest</b> (scikit-learn), applicato via <code>pandas_udf</code> sul vettore <code>(motor_temp, motor_current, battery_pct, v_lin, min_obstacle_dist)</code>. Allenato <i>offline</i> su un campione sintetico di telemetria nominale generato dagli stessi parametri di <code>config/experiment.json</code> (coerenza fra chi genera i dati nominali e chi allena il modello), non online sui dati che sta giudicando — un modello che si auto-allena sui dati che valuta rischierebbe di "abituarsi" ai guasti stessi. Il campionamento sintetico modella esplicitamente la correlazione fra stato di moto e prossimità agli ostacoli (un robot fermo resta "parcheggiato" e la sua distanza da un ostacolo è uno stato stabile per l'intera sosta, non un evento raro — dettaglio emerso e corretto durante l'estensione Passo 14, §2.11).</li>
 </ul>
 <p>Ogni messaggio arricchito viene scritto su <code>fleet_state</code> (stato live per la dashboard); se una delle due tecniche segnala un'anomalia, viene scritto anche su <code>anomalies</code> con <code>type="salute"</code> e l'elenco delle ragioni (<code>threshold_reasons</code>, eventualmente vuoto se solo l'Isolation Forest ha reagito). Verificato empiricamente che le due tecniche sono complementari, non ridondanti: in un test mirato una soglia su <code>motor_temp</code> scattava mentre l'Isolation Forest restava silenzioso (temperatura isolata alta, ma il resto del vettore "sembrava" nominale), e il pattern si è parzialmente invertito su uno spike di corrente.</p>
+<p><b>Nota per chi legge in sequenza</b>: entrambe le tecniche restano sempre attive per la detection descritta qui — <i>non</i> sono state rimosse in nessun punto del progetto. In §2.11 (estensione Passo 14) l'Isolation Forest viene <i>disaccoppiata</i> da un solo, specifico consumatore a valle — l'azione automatica di self healing sulla flotta reale, per un problema di falsi positivi statistici diventati consequenziali una volta collegati a un'azione reale — non dalla pipeline di detection in sé, dove continua a contribuire come qui descritto.</p>
 
 <h4>Rilevamento del deadlock</h4>
 <p>Finestra scorrevole di 20 secondi (slide 10s) per <code>current_edge</code>: se nella finestra compaiono almeno due robot distinti con <code>task_state="blocked"</code> sullo stesso arco, viene emessa un'anomalia <code>type="deadlock"</code>.</p>
@@ -301,8 +350,25 @@
 </ol>
 <p>Il rilevatore finale è quindi un vero operatore stateful per chiave, non un'aggregazione a finestra — più pesante computazionalmente (una chiamata Python per robot per micro-batch), ma l'unico che modella correttamente la semantica richiesta.</p>
 
-<h4>Infrastruttura Spark</h4>
-<p>Cluster Spark standalone (master + worker, immagine Docker custom con <code>pandas</code>/<code>numpy</code>/<code>pyarrow</code>/<code>scikit-learn</code> aggiunti sopra l'immagine base). Il connettore Kafka (<code>spark-sql-kafka-0-10</code>) è risolto a runtime via Maven (<code>--packages</code>), con cache Ivy su un volume Docker dedicato. Lo scheduler FIFO di Spark standalone assegna per default tutti i core al primo job avviato: con più job persistenti (detection, query_service, §2.9) è stato necessario fissare esplicitamente <code>spark.cores.max</code> per ciascuno.</p>
+<h4>Rischio, anomalia, danno: tre misure distinte</h4>
+<p>Il progetto misura tre cose concettualmente diverse, spesso confuse fra loro in una lettura superficiale, ma tenute deliberatamente separate nella pipeline:</p>
+<table>
+  <tr><th>Misura</th><th>Cos'è</th><th>Dove si trova</th><th>Quando è disponibile</th></tr>
+  <tr><td><b>Danno</b> (ground truth)</td><td>Un guasto realmente avvenuto — iniettato per costruire un esperimento controllato (§2.2), o (in linea di principio) un guasto reale del hardware</td><td>topic/tabella <code>injected_faults</code>: <code>robot_id</code>, <code>fault_type</code>, finestra <code>[start_ts, end_ts]</code> reale</td><td><i>A posteriori</i> rispetto al momento in cui è successo — è la verità con cui si giudicano le altre due misure (§3.1)</td></tr>
+  <tr><td><b>Anomalia</b> (detection)</td><td>Ciò che il sistema rileva <i>ora</i>, in tempo reale, guardando la telemetria corrente — soglie fisse + Isolation Forest per la salute (sopra), finestre/stato per deadlock e livelock</td><td>topic <code>anomalies</code>, <code>type</code> ∈ {<code>salute</code>, <code>deadlock</code>, <code>livelock</code>}</td><td>Al momento in cui la condizione anomala è già in corso (con la latenza del trigger, tipicamente pochi secondi per la salute, fino a 60s+ per il livelock, per costruzione — §2.6)</td></tr>
+  <tr><td><b>Rischio</b> (previsione)</td><td>Una stima di <i>quando</i> un canale di salute supererà una soglia critica, calcolata sul trend storico — non è ancora successo nulla</td><td>tabella <code>predictions</code> (§2.12): <code>lead_time_s</code>, il tempo di anticipo stimato</td><td><i>Prima</i> che l'anomalia scatti — è l'unica delle tre misure pensata per essere proattiva, non reattiva (§2.9)</td></tr>
+</table>
+<p>La distinzione conta perché le tre misure hanno gradi di certezza radicalmente diversi: il danno è un fatto (o è successo o non è successo), l'anomalia è un giudizio deterministico o statistico su dati già osservati (può sbagliare: falsi positivi/negativi, §3.1), il rischio è un'estrapolazione (può sbagliarsi ancora di più, dato che assume che il trend attuale continui invariato — discusso esplicitamente in §2.9 a proposito del guasto che si "auto-risolve" durante l'esperimento). Il layer TAG (§2.9) può interrogare tutte e tre insieme proprio perché restano tabelle separate con la stessa chiave (<code>robot_id</code>, tempo) — es. "quali robot hanno un rischio alto ma nessuna anomalia rilevata ancora?" è una domanda a cui si può rispondere solo avendole tenute distinte.</p>
+
+<h4>Infrastruttura Spark: scelte implementative e perché</h4>
+<ul>
+  <li><b>Cluster standalone (master + worker), non YARN/Kubernetes/<code>local[*]</code>.</b> Standalone è la modalità più semplice che Spark offre per un vero cluster distribuito (driver/master/worker separati) senza bisogno di un resource manager esterno — coerente con un deployment Docker Compose a container fissi, non un ambiente cloud elastico. Rispetto a <code>local[*]</code> (un solo processo, usato tipicamente per debug), separare master e worker rispecchia più fedelmente un'architettura Spark di produzione, anche se qui gira su una singola macchina fisica.</li>
+  <li><b>Immagine Docker custom</b> (<code>spark/Dockerfile</code>, base <code>bitnamilegacy/spark:3.5.6</code>) con <code>pandas</code>/<code>numpy</code>/<code>pyarrow</code>/<code>scikit-learn</code> aggiunti: servono agli executor per il <code>pandas_udf</code> dell'Isolation Forest e per <code>applyInPandasWithState</code> del livelock — l'immagine bitnami base ha solo PySpark puro.</li>
+  <li><b>Connettore Kafka risolto a runtime</b> (<code>--packages org.apache.spark:spark-sql-kafka-0-10</code> via Maven/Ivy a ogni avvio, non incluso nell'immagine), con la cache Ivy su un volume Docker dedicato per non riscaricare le stesse dipendenze a ogni riavvio del container.</li>
+  <li><b>Checkpoint: <code>/tmp</code> per <code>detection_job.py</code>, <code>/data/_checkpoints</code> (persistente) per <code>persistence_job.py</code> (§2.7).</b> Non è un'incoerenza ma una scelta deliberata, diversa per scopi diversi: <code>detection_job.py</code> legge solo <code>latest</code> (vuole reagire a ciò che succede ora, non recuperare uno storico), quindi perdere il checkpoint a un riavvio non ha conseguenze — riparte semplicemente da "adesso". <code>persistence_job.py</code> legge <code>earliest</code> e costruisce l'archivio storico: perdere il suo checkpoint causerebbe la rilettura e la duplicazione di dati già scritti su Parquet, quindi il suo checkpoint vive sul volume persistente <code>/data</code>, non in un <code>/tmp</code> che sparisce al riavvio del container.</li>
+  <li><b><code>spark.sql.streaming.stateStore.stateSchemaCheck=false</code></b>, solo per <code>detection_job.py</code>: il controllo di compatibilità dello schema di stato fra un micro-batch e l'altro dà un falso positivo (<code>StateSchemaNotCompatible</code>) su operatori stateful Python (<code>applyInPandasWithState</code>) anche a schema invariato — un limite noto di questa combinazione di Spark, non un problema di logica.</li>
+  <li><b><code>spark.cores.max</code> fissato esplicitamente per ciascun job persistente</b> (non lasciato al default): lo scheduler FIFO di Spark standalone assegna per default <i>tutti</i> i core disponibili al primo job che parte, il che con più job persistenti sullo stesso cluster (detection, query_service del layer TAG, §2.9) affamerebbe gli altri. Il valore esatto per <code>detection_job.py</code> è stato rivisto due volte in corso d'opera, per due motivi opposti — un caso concreto di quanto sia difficile tarare una singola costante quando lo stesso job serve scenari di carico molto diversi: <b>alzato</b> da 8 a 10 core durante la costruzione della suite di test (carico pesante del generatore sintetico, §2.5, dove i micro-batch restavano indietro); <b>riportato giù</b> a 4 core dopo aver scoperto che, sulla flotta ROS reale (poche unità di robot), quegli stessi 10 core mettono Spark in competizione diretta con Gazebo per la CPU della stessa macchina — nessun limite di risorse è impostato sui container (§2.4), quindi la contesa non è arbitrata da nessuno se non dalla configurazione dei singoli job. Dettagli della diagnosi in §3.3.</li>
+</ul>
 
 <h3>2.7 Batch layer: persistenza e soglie adattive</h3>
 <p><code>streaming/persistence_job.py</code> — tre query Structured Streaming indipendenti (stesso pattern del job di detection) che leggono <code>telemetry</code>, <code>anomalies</code>, <code>injected_faults</code> con <code>startingOffsets=earliest</code> (a differenza del job di detection, che legge solo <code>latest</code>: qui lo scopo è costruire l'archivio storico completo) e li scrivono su <b>Parquet</b>, su un volume Docker condiviso montato in sola lettura dal backend. <code>anomalies</code> è partizionato per <code>type</code>, dato che le query a valle (TAG, valutazione sperimentale) filtrano quasi sempre per tipo.</p>
@@ -530,7 +596,7 @@
 </table>
 <p>L'unica domanda TAG "sbagliata" ("qual è la temperatura media dei robot con guasti") si è rivelata un'<b>ambiguità genuina della domanda</b>, non un errore del sistema: la query di riferimento calcola la media su tutta la telemetria dei robot coinvolti, mentre il modello ha scelto — in modo altrettanto legittimo — di calcolarla solo sulle anomalie di temperatura rilevate. È stata lasciata così come esempio concreto dei limiti intrinseci dell'interrogazione in linguaggio naturale, invece di correggere la domanda per farla "tornare" artificialmente.</p>
 <div class="caveat">
-<b>Limite metodologico dichiarato.</b> Le metriche di detection sopra sono misurate sul generatore sintetico (Passo 12), non sulla flotta ROS/Gazebo reale: la ground truth richiede un numero di robot e di ripetizioni controllate che sarebbe troppo lento/costoso da ottenere avviando ripetutamente l'intera simulazione fisica. È un compromesso dichiarato, non nascosto: la pipeline di detection è identica sui due percorsi (stesso schema, stesso codice Spark), e la fedeltà fisica della sorgente ROS/Gazebo è stata comunque verificata qualitativamente e in modo end-to-end (§3.3), ma le cifre di precision/recall riportate qui non provano che la detection funzioni altrettanto bene sul rumore realistico della simulazione fisica quanto su quello, più pulito, del generatore sintetico.
+<b>Limite metodologico dichiarato.</b> Le metriche di detection sopra sono misurate sul generatore sintetico (Passo 12), non sulla flotta ROS/Gazebo reale: la ground truth richiede un numero di robot e di ripetizioni controllate che sarebbe troppo lento/costoso da ottenere avviando ripetutamente l'intera simulazione fisica. È un compromesso dichiarato, non nascosto: la pipeline di detection è identica sui due percorsi (stesso schema, stesso codice Spark), e la fedeltà fisica della sorgente ROS/Gazebo è stata comunque verificata qualitativamente e in modo end-to-end (§3.4), ma le cifre di precision/recall riportate qui non provano che la detection funzioni altrettanto bene sul rumore realistico della simulazione fisica quanto su quello, più pulito, del generatore sintetico.
 </div>
 
 <h3>3.2 Efficiency: scalabilità e latenza</h3>
@@ -549,7 +615,18 @@
 </table>
 <p>Il collo di bottiglia individuato per il throughput è il processo Python singolo del generatore sintetico (non Kafka o Spark, che nei test non mostrano saturazione alla stessa scala). Il numero di "~30s" di latenza onset&rarr;alert <b>non è la vera latenza minima del sistema</b> (osservata altrove, in condizioni dedicate, dell'ordine di pochi secondi, coerente col trigger di 2s della query di salute): il meccanismo di misura descritto sopra usa due consumer Kafka interrogati <b>in sequenza</b> (prima si attende la conferma del guasto, poi si comincia ad ascoltare gli alert), quindi il numero misura anche il tempo speso dallo script di test stesso prima di mettersi in ascolto, non solo il tempo che il sistema impiega a produrre l'alert — un limite dichiarato del metodo di misura, non delle prestazioni reali (§4.3 propone una misura più rigorosa come sviluppo futuro).</p>
 
-<h3>3.3 Verifica end-to-end sulla flotta reale</h3>
+<h3>3.3 Valutazione sulla scalabilità</h3>
+<p>Il sistema ha due assi di scala molto diversi fra loro, con colli di bottiglia diversi — vale la pena distinguerli invece di parlare di "scalabilità" come se fosse un unico numero.</p>
+
+<h4>Scala del volume di dati (ingestion/detection): il generatore sintetico</h4>
+<p>Kafka e Spark, nei test dello sweep (§3.2), non hanno mai mostrato di essere il collo di bottiglia fino a decine di migliaia di messaggi al secondo — il limite osservato (~40 000 msg/s target, 77% raggiunto) è nel <b>generatore sintetico stesso</b>: un singolo processo Python (§2.5), limitato dal GIL e dalla schedulazione a coda di priorità di migliaia di robot-token nello stesso processo. La strada di scala orizzontale già prevista nel codice, se servisse spingersi oltre, è lanciare più istanze del generatore in parallelo (prefissi <code>robot_id</code> diversi) invece di riscrivere lo script con multiprocessing — non è stato necessario esercitarla per questo progetto. Lato Kafka, la scelta della chiave <code>robot_id</code> (§2.4) predispone ad aumentare le partizioni per parallelizzare ulteriormente la lettura, un margine non ancora sfruttato nella configurazione attuale (un solo broker, partizione singola di default).</p>
+
+<h4>Scala del numero di robot reali (ROS/Gazebo): un problema diverso, di CPU condivisa</h4>
+<p>Qui il vincolo non è il throughput dei dati (pochi robot × ~2Hz è un carico minuscolo per Kafka/Spark) ma la <b>simulazione fisica</b>: Gazebo deve calcolare la dinamica, il lidar e la pianificazione locale di ogni robot in tempo reale, un costo che cresce con il numero di robot indipendentemente da quanto sia leggero il resto della pipeline. Il progetto offre due scenari selezionabili (<code>small</code>: 4 robot, <code>large</code>: 8 robot, §2.11) proprio perché aggiungerne altri non è una questione di codice ma di CPU disponibile sulla macchina host.</p>
+<p>Un problema concreto emerso <i>durante lo sviluppo</i> illustra bene perché i due assi di scala non sono indipendenti: il valore <code>spark.cores.max</code> di <code>detection_job.py</code>, alzato a 10 per reggere il carico pesante del generatore sintetico (migliaia di robot-token), si è rivelato eccessivo per la flotta ROS reale — con nessun limite di risorse impostato sui container (§2.4), Spark e Gazebo competono liberamente per la CPU della stessa macchina, e 10 core dati a Spark hanno prodotto micro-batch che invece di 2 secondi ne impiegavano 30-65, osservato nei log (<code>WARN ProcessingTimeExecutor: Current batch is falling behind</code>) e confermato misurando l'offset del topic <code>fleet_state</code> fermo per decine di secondi alla volta nonostante Gazebo continuasse a muovere i robot normalmente. Ridotto a 4 core, il problema è attenuato ma — onestamente — non risolto del tutto sull'hardware di sviluppo usato per questa verifica (si veda il limite dichiarato in §4.2): un sintomo pratico di quanto la co-locazione di un cluster Spark e di un simulatore fisico sulla stessa macchina, senza isolamento di risorse esplicito, sia intrinsecamente più fragile di scalare l'uno o l'altro in isolamento.</p>
+<p><b>In sintesi</b>: il sistema scala bene sull'asse "quanti dati" (Kafka/Spark, dimostrato fino a decine di migliaia di msg/s), assai meno sull'asse "quanti robot fisici simulati contemporaneamente" (limitato dalla CPU della simulazione stessa, aggravato dalla contesa con Spark) — una distinzione che vale la pena avere chiara: aggiungere hardware o ottimizzare il codice risolverebbe il primo problema, ma il secondo resta comunque vincolato dal costo intrinseco di simulare fisica realistica, non solo di elaborare dati.</p>
+
+<h3>3.4 Verifica end-to-end sulla flotta reale</h3>
 <p>Oltre alle metriche quantitative sopra (misurate sul generatore per motivi di scala, §3.1), il comportamento end-to-end è stato verificato con dati realmente prodotti dalla simulazione fisica ROS/Gazebo, non solo letto dal codice:</p>
 <ul>
   <li><b>Conflitto fisico reale</b>: due robot comandati verso l'estremità opposta dello stesso corridoio a corsia singola nello stesso momento hanno prodotto uno stallo reale (<code>task_state="blocked"</code> osservato su Kafka, non simulato) — prima conferma empirica che i choke point del grafo hanno un effetto fisico reale, non solo un vincolo dichiarato in un file di configurazione.</li>
@@ -558,7 +635,7 @@
   <li><b>Ripristino manuale</b>: il comando "rimetti in servizio" da dashboard riporta correttamente il robot riparato verso il nodo di riserva.</li>
 </ul>
 
-<h3>3.4 Copertura dei requisiti del corso</h3>
+<h3>3.5 Copertura dei requisiti del corso</h3>
 <table class="req-table">
   <tr><th>Requisito (Topic 7)</th><th>Dove è coperto</th></tr>
   <tr><td>Ingest di stream continui da sensori</td><td>Telemetria TurtleBot3 → nodo-ponte ROS → Kafka</td></tr>
@@ -590,6 +667,8 @@
   <li>La larghezza dei corridoi fisici (0.8 m) è stata tarata empiricamente, non validata in modo esaustivo su tutte le combinazioni di traiettorie possibili.</li>
   <li>La soglia di conferma del livelock (60s) è una costante fissa, non adattiva al ritmo operativo della flotta.</li>
   <li>La misura di latenza onset→alert riportata (§3.2) è volutamente prudente per un limite del metodo di misura (consumer interrogati in sequenza), non la vera latenza minima del sistema.</li>
+  <li>Nessun limite di risorse (CPU/RAM) è impostato sui container Docker (§2.4, §3.3): su una macchina con pochi core disponibili, Spark e Gazebo competono liberamente per la CPU, con un impatto diretto sulla fluidità della dashboard durante l'uso della flotta reale — attenuato tarando <code>spark.cores.max</code>, non eliminato del tutto sull'hardware usato per lo sviluppo.</li>
+  <li>Un solo broker Kafka a partizione singola per topic (§2.4): l'ordinamento per <code>robot_id</code> è garantito e il margine di scalabilità orizzontale resta disponibile in futuro, ma non è ancora sfruttato nella configurazione attuale.</li>
 </ul>
 
 <h3>4.3 Sviluppi futuri</h3>

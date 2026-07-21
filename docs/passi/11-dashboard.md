@@ -171,6 +171,24 @@ docker exec -d shf-spark-master bash -c "
     /opt/shf/streaming/query_service.py > /tmp/query_service.log 2>&1"
 ```
 
+## Correzione (2026-07-21): "la griglia sulla mappa viene visualizzata tagliata"
+
+Segnalato dall'utente dopo aver scaricato il progetto ed eseguito la simulazione: sul canvas mancavano le etichette (e in parte gli anelli di stato) dei nodi sul perimetro del grafo (D, E, F, G, H, I, J), come se il disegno fosse tagliato — non un problema di CSS/layout (verificato: il canvas ha sempre la sua dimensione intrinseca 820×480, nessun overflow del contenitore).
+
+**Causa reale**: `buildTransform()` mappa i nodi del grafo esattamente fino al bordo dell'area `[PADDING, canvas.width-PADDING] × [PADDING, canvas.height-PADDING]` — un nodo sul perimetro (es. D/G/J sul lato destro, E/F/G su quello superiore) atterra quindi **esattamente sul confine** della zona di `ctx.clip()` applicata in `render()`. Qualunque cosa disegnata *oltre* il punto esatto del nodo — l'etichetta di testo (offset `+8`/`-8` px), l'anello di anomalia di salute (raggio 13px), quello di deadlock/livelock (17px) — finiva tagliata via dal clip per tutti i nodi perimetrali. Il clip stesso (introdotto in una correzione precedente, Estensione 4, per nascondere robot con coordinate incoerenti) funzionava correttamente per il suo scopo originale: il problema era che il margine fra "dove arrivano i nodi" e "dove taglia il clip" era zero.
+
+**Fix**: `render()` ora usa un margine (`CLIP_MARGIN = 20px`) tale che la zona di clip sia più larga della zona in cui `buildTransform()` mappa i nodi, lasciando spazio per etichette/anelli senza perdere lo scopo difensivo originale (un robot con coordinate del tutto incoerenti resta comunque fuori e invisibile).
+
+**Verificato**: screenshot del canvas prima/dopo (Chromium headless via CDP) — prima, solo 5 dei 10 nodi (A, B, C, H, I) visibili con etichetta; dopo, tutti e 10 correttamente etichettati, bordo del grafo intero visibile.
+
+## Correzione (2026-07-21): simulazione "a scatti" sulla mappa
+
+Segnalato insieme al problema sopra. Diagnosticato con dati reali (non a naso): campionando `robots.get('R1')._receivedAt` lato client ogni 150ms per alcuni secondi, il valore restava **identico per 4+ secondi consecutivi** — nessun nuovo messaggio "update" arrivava via websocket in quella finestra, non un problema del dead reckoning (che funziona correttamente quando i dati arrivano). Risalendo la catena: il topic Kafka `fleet_state` stesso non riceveva nuovi messaggi per intervalli di decine di secondi (offset identico su una finestra di 6s, verificato più volte), mentre `telemetry` continuava ad arrivare normalmente — quindi il problema non era ROS/Gazebo (che infatti continuava a pianificare e muovere i robot regolarmente, log `move_base` alla mano) ma la query di detection che scrive `fleet_state`.
+
+**Causa**: `detection_job.py` (Passo 7) girava con `spark.cores.max=10`, un valore tarato per il carico pesante del generatore sintetico (migliaia di robot-token, Passo 12/13), non per la flotta ROS reale (4-8 robot). Su una macchina con un numero di core limitato, questo mette Spark in **diretta competizione con Gazebo** per la CPU della stessa macchina — osservato nei log: `WARN ProcessingTimeExecutor: Current batch is falling behind. The trigger interval is 2000 milliseconds, but spent 30000-65000 milliseconds` (un micro-batch da 2s che ne impiegava 15-30 volte tanto). L'operatore stateful del livelock (`applyInPandasWithState`) aggrava la cosa: apre un processo Python (`pyspark.daemon`) separato per micro-batch, osservate empiricamente decine di questi processi concorrenti anche con soli 4 robot reali.
+
+**Fix**: `spark.cores.max` di `detection_job.py` ridotto da 10 a 4 in `streaming/start-master.sh` — lascia più margine di CPU a Gazebo. Vedi anche `docs/passi/01-scaffold-infrastruttura.md` per il fix collegato (retry automatico se Kafka non è pronto). **Limite dichiarato**: nella sandbox di sviluppo (fortemente sotto carico dopo ore di test continui, swap quasi pieno) il rallentamento è migliorato ma non del tutto sparito — su una macchina "fresca" (non stressata da ore di testing) l'effetto della riduzione dovrebbe essere più netto; se il problema persiste sulla macchina dell'utente, il prossimo passo naturale è verificare RAM/CPU liberi reali (vedi soglie riviste in `README.md`).
+
 ## Prossimo passo
 
 Passo 12 — Generatore sintetico per lo sweep di scalabilità: robot come token sul grafo (stesso schema messaggi) per stressare Kafka+Spark a volumi che Gazebo non può raggiungere, in preparazione all'esperimento di efficiency del Passo 13.

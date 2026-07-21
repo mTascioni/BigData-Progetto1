@@ -182,16 +182,27 @@ function drawRobots(now) {
   }
 }
 
+// buildTransform mappa i nodi esattamente fino al bordo dell'area
+// [PADDING, canvas.width-PADDING]: un nodo sul perimetro del grafo (es. D/G/J
+// sul bordo destro, E/F/G su quello superiore) cade quindi ESATTAMENTE sul
+// confine della zona di clip qui sotto. Tutto cio' che si disegna oltre il
+// punto esatto del nodo -- l'etichetta di testo (offset +8/-8px), l'anello
+// di anomalia (raggio 13px), quello di deadlock/livelock (17px) -- finiva
+// tagliato via dal clip per i nodi perimetrali (bug reale segnalato
+// dall'utente, "la griglia viene visualizzata tagliata": non un problema di
+// CSS/layout, il canvas disegnava correttamente ma il clip la troncava).
+// Fix: la zona di clip resta piu' larga di CLIP_MARGIN px per lato rispetto
+// a dove arrivano i nodi, cosi' c'e' spazio per etichette/anelli senza
+// perdere lo scopo originale del clip (nascondere robot fuori griglia).
+const CLIP_MARGIN = 20;
+
 function render() {
   const now = performance.now();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  // clip all'area del grafo: un robot con coordinate non coerenti con
-  // questa mappa (es. generatore sintetico lanciato su un preset diverso
-  // da "medio", o un fantasma non ancora scaduto) sparisce invece di
-  // apparire fuori griglia in una posizione fuorviante.
+  const clipPadding = PADDING - CLIP_MARGIN;
   ctx.save();
   ctx.beginPath();
-  ctx.rect(PADDING, PADDING, canvas.width - 2 * PADDING, canvas.height - 2 * PADDING);
+  ctx.rect(clipPadding, clipPadding, canvas.width - 2 * clipPadding, canvas.height - 2 * clipPadding);
   ctx.clip();
   drawGraph(now);
   drawRobots(now);
