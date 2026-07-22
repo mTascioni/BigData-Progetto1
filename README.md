@@ -62,7 +62,7 @@ docker compose down       # ferma e rimuove i container (i dati persistiti su /d
 
 ## Struttura del progetto
 
-- `ros/` — ROS1 Noetic + Gazebo + TurtleBot3. `catkin_ws/src/shf_bringup/scripts/`: `kafka_bridge.py` (ROS → Kafka), `graph_navigator.py` (movimento sul grafo), `fleet_control_service.py` (HTTP per avvio simulazione/guasti live). `launch/`, `worlds/`, `config/`: lancio multi-robot, mappa Gazebo, parametri navigazione. `bags/`: eventuali registrazioni ROS bag.
+- `ros/` — ROS1 Noetic + Gazebo + TurtleBot3. `catkin_ws/src/shf_bringup/scripts/`: `kafka_bridge.py` (ROS → Kafka), `graph_navigator.py` (movimento sul grafo), `fleet_control_service.py` (HTTP per avvio simulazione/guasti live). `launch/`, `worlds/`, `config/`: lancio multi-robot, mappa Gazebo, parametri navigazione. `bags/`: registrazioni ROS bag (in realtà non le ho più usate).
 - `streaming/` — job Spark Structured Streaming: `detection_job.py` (real-time: salute, deadlock, livelock, previsione), `persistence_job.py` (batch → Parquet), `query_service.py` (Spark SQL per il layer TAG), `schemas.py`, `isolation_forest_model.py`/`train_isolation_forest.py`/`models/`.
 - `generator/` — simulazione sintetica alternativa a ROS/Gazebo: `synthetic_generator.py` + `generator_service.py` (controllo HTTP).
 - `predictive/` — `forecast_failures.py`: previsione offline (regressione lineare) dei guasti.
@@ -72,8 +72,3 @@ docker compose down       # ferma e rimuove i container (i dati persistiti su /d
 - `backend/` — Node.js/Express: `src/routes/`, `src/services/` (Kafka, layer TAG, guardia SQL, stato flotta), `src/config/` (credenziali Hugging Face).
 - `dashboard/` — frontend: `index.html`, `app.js`, `style.css` — nessun framework.
 - `spark/` — Dockerfile dell'immagine Spark (master + worker).
-- `config/` — `warehouse_graph.json`, `experiment.json`, `presets/`.
-- Radice — `docker-compose.yml`, questo `README.md`.
-
-docker compose down -v    # come sopra, ma cancella anche i volumi (Kafka, storico Parquet, cache Ivy) — riparte da zero
-```
