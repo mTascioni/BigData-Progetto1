@@ -43,7 +43,7 @@ docker compose build
 docker compose up -d
 ```
 
-### Dashboard
+### Connettersi alla Dashboard
 
 Tramite browser bisogna connettersi al server hostato dal container docker. Per farlo, questi gli url di riferimento:
 
@@ -58,7 +58,6 @@ Volendo riprodurre i risultati inseriti nel report:
 Dalla dashboard (in fondo alla pagina, "Risultati sperimentazioni").
 
 I risultati (CSV) vengono salvati in `/data/eval/` sul volume condiviso.
-
 
 ### Fermare i container
 
