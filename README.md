@@ -49,7 +49,7 @@ Tramite browser bisogna connettersi al server hostato dal container docker. Per 
 | **Dashboard** | http://localhost:3000 |
 | Live di Gazebo con noVNC | http://localhost:6080/vnc.html 
 
-## Esperimenti
+### Esperimenti
 
 Volendo riprodurre i risultati inseriti nel report:
 Dalla dashboard (in fondo alla pagina, "Risultati sperimentazioni").
@@ -57,7 +57,7 @@ Dalla dashboard (in fondo alla pagina, "Risultati sperimentazioni").
 I risultati (CSV) vengono salvati in `/data/eval/` sul volume condiviso.
 
 
-## Fermare tutto
+### Fermare i container
 
 ```bash
 docker compose down       # ferma e rimuove i container (i dati persistiti su /data restano nel volume shf-data)
