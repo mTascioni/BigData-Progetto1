@@ -1,12 +1,10 @@
-"""Modello Isolation Forest per la detection delle anomalie di salute
-(Passo 7). Nessuno storico reale e' ancora disponibile (la persistenza
-Parquet arriva al Passo 8): il modello viene allenato su un campione
-sintetico di telemetria "nominale", generato a partire dagli stessi
-parametri (health_channels_nominal) fissati in config/experiment.json al
-Passo 2 -- stessa fonte di verita' usata dal nodo-ponte per sintetizzare i
-canali di salute. Andra' ri-allenato sullo storico reale una volta
-disponibile (Passo 8+), sostituendo generate_nominal_samples() con una
-lettura da Parquet.
+"""Modello Isolation Forest per la detection delle anomalie di salute. Il
+modello viene allenato su un campione sintetico di telemetria "nominale",
+generato a partire dagli stessi parametri (health_channels_nominal)
+fissati in config/experiment.json -- stessa fonte di verita' usata dal
+nodo-ponte per sintetizzare i canali di salute. Puo' essere ri-allenato
+sullo storico reale una volta accumulato, sostituendo
+generate_nominal_samples() con una lettura da Parquet.
 """
 import pickle
 import random
@@ -44,7 +42,7 @@ def generate_nominal_samples(health_cfg, n=5000, seed=42):
             if r < 0.7:
                 min_obstacle_dist = min(3.5, abs(rng.gauss(3.4, 0.2)))  # area aperta, nessun ostacolo vicino
             elif r < 0.9:
-                min_obstacle_dist = rng.uniform(0.8, 1.5)  # corridoio stretto (Passo 14): pareti vicine, normale
+                min_obstacle_dist = rng.uniform(0.8, 1.5)  # corridoio stretto: pareti vicine, normale
             else:
                 min_obstacle_dist = rng.uniform(0.3, 3.5)  # incrocia un altro robot/scaffale
         else:

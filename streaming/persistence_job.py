@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Job PySpark Structured Streaming di persistenza (Passo 8).
+"""Job PySpark Structured Streaming di persistenza.
 
 Consuma i topic Kafka `telemetry`, `anomalies`, `injected_faults` e li
 scrive su Parquet (storico), nelle directory nominate in CLAUDE.md:
@@ -14,9 +14,22 @@ perso a un riavvio, il job rileggerebbe tutto da earliest e duplicherebbe
 righe gia' scritte nei Parquet -- qui la correttezza dello storico conta
 piu' che nel job real-time.
 
-`anomalies` e' partizionato per `type` (salute/livelock/deadlock): le
-query del Passo 10 (TAG) e del Passo 13 (eval) filtrano quasi sempre per
-tipo, e il partitioning evita di scansionare tutto il dataset ogni volta.
+`anomalies` e' partizionato per `type` (salute/livelock/deadlock/previsione):
+le query del layer TAG e degli script di valutazione filtrano quasi sempre
+per tipo, e il partitioning evita di scansionare tutto il dataset ogni
+volta. `telemetry`/`injected_faults` non sono partizionati.
+
+`run_id` (isolamento fra run diversi) e' una colonna normale in tutte e tre
+le tabelle, NON una chiave di partizione: partizionare anche per `run_id`
+e' stato provato e scartato -- aggiungere una colonna di partizione a una
+directory Parquet che ha gia' dati scritti con uno schema di partizione
+diverso (qui: `type=X/*.parquet` piatto, dati precedenti a questa modifica)
+rompe la lettura dell'INTERA tabella ("Conflicting partition column names",
+non un problema per-file: Spark pretende uno schema di partizione uniforme
+su tutta la directory). Filtrare per `run_id` via `WHERE` in SQL resta
+comunque efficiente quanto basta per i volumi di questo progetto, senza il
+rischio di rompere lo storico esistente ogni volta che si aggiunge una
+colonna.
 """
 import os
 import sys
@@ -31,6 +44,15 @@ KAFKA_BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP", "kafka:9092")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
 CHECKPOINT_DIR = os.environ.get("CHECKPOINT_DIR", "/data/_checkpoints")
 TRIGGER = os.environ.get("PERSIST_TRIGGER", "10 seconds")
+# Se il checkpoint va perso/resettato, il job riparte da `earliest` su un
+# topic che nel frattempo puo' aver accumulato milioni di messaggi
+# (telemetry, con molti robot/run nel tempo): senza un limite, il PRIMO
+# micro-batch prova a leggerli tutti in un colpo solo, restando
+# silenziosamente "fermo" (nessun batch commesso, quindi nessun file
+# scritto) anche per molti minuti su una macchina con poche risorse. Un
+# tetto per trigger fa avanzare il checkpoint a pezzi, con progresso
+# visibile fin dal primo batch.
+MAX_OFFSETS_PER_TRIGGER = os.environ.get("PERSIST_MAX_OFFSETS_PER_TRIGGER", "20000")
 
 
 def read_topic(spark, topic, schema):
@@ -39,6 +61,7 @@ def read_topic(spark, topic, schema):
         .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP)
         .option("subscribe", topic)
         .option("startingOffsets", "earliest")
+        .option("maxOffsetsPerTrigger", MAX_OFFSETS_PER_TRIGGER)
         .load()
     )
     return raw.select(F.from_json(F.col("value").cast("string"), schema).alias("m")).select("m.*")

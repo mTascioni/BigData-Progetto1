@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Previsione offline dei guasti sui canali di salute (Passo 9).
+"""Previsione offline dei guasti sui canali di salute.
 
 Per ogni robot e ciascun canale di salute (motor_temp, motor_current,
-battery_pct), guarda la finestra recente dello storico persistito (Passo
-8) e, solo se c'e' gia' un trend abbastanza marcato da non essere rumore
-nominale, allena una regressione lineare sulla serie ricampionata ed
-estrapola la retta in avanti fino a trovare l'istante previsto di
-superamento della soglia critica -> "lead time" (tempo di vita utile
-residuo). Scrive `/data/predictions`.
+battery_pct), guarda la finestra recente dello storico persistito e, solo
+se c'e' gia' un trend abbastanza marcato da non essere rumore nominale,
+allena una regressione lineare sulla serie ricampionata ed estrapola la
+retta in avanti fino a trovare l'istante previsto di superamento della
+soglia critica -> "lead time" (tempo di vita utile residuo). Scrive
+`/data/predictions`.
 
 Regressione lineare invece di ARIMA/Prophet/LSTM: i segnali che vogliamo
 prevedere (rampe di guasto quasi lineari, es. deriva_termica) non hanno
 bisogno di un modello piu' complesso, ed e' molto piu' semplice da
 spiegare e verificare. Le soglie critiche non sono arbitrarie: coincidono
-coi valori-obiettivo delle firme di guasto fissate al Passo 2
+coi valori-obiettivo delle firme di guasto fissate in config/experiment.json
 (`plateau_temp_c` di deriva_termica, `peak_a` di spike_corrente) -- e' li'
 che un guasto di quel tipo, se non corretto, porterebbe la metrica.
 """
@@ -26,15 +26,15 @@ import numpy as np
 import pandas as pd
 
 CRITICAL_THRESHOLDS = {
-    "motor_temp": {"direction": "above", "value": 85.0},    # = plateau_temp_c di deriva_termica (Passo 2)
-    "motor_current": {"direction": "above", "value": 4.5},  # = peak_a di spike_corrente (Passo 2)
+    "motor_temp": {"direction": "above", "value": 85.0},    # = plateau_temp_c di deriva_termica
+    "motor_current": {"direction": "above", "value": 4.5},  # = peak_a di spike_corrente
     "battery_pct": {"direction": "below", "value": 10.0},
 }
 
 # sotto questa pendenza (per canale, per minuto) non e' un trend verso il
 # guasto, e' rumore nominale -- calibrate sui rate nominali di
-# config/experiment.json (Passo 2): drain nominale batteria -0.5%/min in
-# movimento, quindi la soglia va ben oltre per non scattare sempre.
+# config/experiment.json: drain nominale batteria -0.5%/min in movimento,
+# quindi la soglia va ben oltre per non scattare sempre.
 MIN_SLOPE_PER_MIN = {
     "motor_temp": 0.5,
     "motor_current": 0.05,
@@ -65,12 +65,20 @@ def load_parquet_dir(path):
     return pd.read_parquet(path)
 
 
-def resample_channel(telemetry, robot_id, channel, lookback_s, now_ts):
-    sub = telemetry[
+def resample_channel(telemetry, robot_id, channel, lookback_s, now_ts, run_id=None):
+    mask = (
         (telemetry["robot_id"] == robot_id)
         & (telemetry["ts"] >= now_ts - lookback_s * 1000)
         & (telemetry["ts"] <= now_ts)
-    ][["ts", channel]].dropna().sort_values("ts")
+    )
+    # Isolamento fra run diversi: robot_id e' riusato ad ogni run del
+    # generatore sintetico (es. SIM00000), quindi senza filtrare per run_id
+    # il trend calcolato mischierebbe run diversi. run_id=None (storico
+    # pre-esistente senza questo campo) mantiene il comportamento
+    # precedente, nessun filtro.
+    if run_id is not None and "run_id" in telemetry.columns:
+        mask &= telemetry["run_id"] == run_id
+    sub = telemetry[mask][["ts", channel]].dropna().sort_values("ts")
     if sub.empty:
         return None
     sub = sub.assign(t=pd.to_datetime(sub["ts"], unit="ms")).set_index("t")[channel]
@@ -101,8 +109,8 @@ def find_crossing_s(intercept, slope, direction, critical_value, max_horizon_s):
     return t_cross
 
 
-def analyze(telemetry, robot_id, channel, lookback_s, now_ts):
-    series = resample_channel(telemetry, robot_id, channel, lookback_s, now_ts)
+def analyze(telemetry, robot_id, channel, lookback_s, now_ts, run_id=None):
+    series = resample_channel(telemetry, robot_id, channel, lookback_s, now_ts, run_id=run_id)
     if series is None or len(series) < MIN_POINTS:
         return None
 
@@ -126,6 +134,7 @@ def analyze(telemetry, robot_id, channel, lookback_s, now_ts):
 
     return {
         "robot_id": robot_id,
+        "run_id": run_id,
         "channel": channel,
         "predicted_at_ts": now_ts,
         "current_value": float(series.iloc[-1]),
@@ -146,6 +155,9 @@ def main():
     parser.add_argument("--now-ts", type=int, default=None,
                          help="epoch ms da cui guardare indietro (default: l'ultimo timestamp disponibile). "
                               "Utile per rieseguire l'analisi 'come se fosse' un istante passato.")
+    parser.add_argument("--run-id", default=None,
+                         help="isola l'analisi a un run_id specifico (default: l'ultimo presente nello "
+                              "storico, o nessun filtro se lo storico non ha affatto la colonna run_id)")
     args = parser.parse_args()
 
     telemetry = load_parquet_dir(os.path.join(args.data_dir, "telemetry"))
@@ -154,13 +166,25 @@ def main():
         return
 
     now_ts = args.now_ts if args.now_ts is not None else int(telemetry["ts"].max())
-    robots = sorted(telemetry["robot_id"].dropna().unique())
-    print(f"Analizzo {len(robots)} robot su una finestra di {args.lookback_s}s (now_ts={now_ts})")
+
+    # Isolamento fra run: di default si analizza solo l'ULTIMO run_id
+    # presente nello storico (quello a cui appartiene now_ts), non tutto lo
+    # storico assieme -- altrimenti robot_id riusati fra run diversi (es.
+    # il generatore sintetico) mischierebbero trend di run differenti in
+    # un'unica retta.
+    run_id = args.run_id if "run_id" in telemetry.columns else None
+    if run_id is None and "run_id" in telemetry.columns and telemetry["run_id"].notna().any():
+        run_id = telemetry.loc[telemetry["ts"] == telemetry["ts"].max(), "run_id"].iloc[0]
+
+    scope = telemetry if run_id is None else telemetry[telemetry["run_id"] == run_id]
+    robots = sorted(scope["robot_id"].dropna().unique())
+    print(f"Analizzo {len(robots)} robot (run_id={run_id or 'nessun filtro, storico senza run_id'}) "
+          f"su una finestra di {args.lookback_s}s (now_ts={now_ts})")
 
     predictions = []
     for robot_id in robots:
         for channel in CRITICAL_THRESHOLDS:
-            pred = analyze(telemetry, robot_id, channel, args.lookback_s, now_ts)
+            pred = analyze(telemetry, robot_id, channel, args.lookback_s, now_ts, run_id=run_id)
             if pred:
                 predictions.append(pred)
 

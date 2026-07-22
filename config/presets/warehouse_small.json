@@ -1,5 +1,5 @@
 {
-  "description": "Preset 'piccolo' per il pannello di controllo del generatore sintetico (Passo 11, estensione): un anello a 6 nodi con un solo corridoio a corsia singola (B-F) come choke point. Non usato da ROS/Gazebo (che resta sul grafo reale in config/warehouse_graph.json), solo dal generatore.",
+  "description": "Preset 'piccolo' per il pannello di controllo del generatore sintetico: un anello a 6 nodi con un solo corridoio a corsia singola (B-F) come choke point. Non usato da ROS/Gazebo (che resta sul grafo reale in config/warehouse_graph.json), solo dal generatore.",
   "nodes": [
     { "id": "A", "x": 0, "y": 0, "kind": "dock" },
     { "id": "B", "x": 10, "y": 0, "kind": "junction" },

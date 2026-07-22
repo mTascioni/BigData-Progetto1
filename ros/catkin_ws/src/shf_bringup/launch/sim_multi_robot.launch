@@ -7,24 +7,27 @@
     E=(10,10), G=(30,10), H=(20,-10), F=(20,10)): roslaunch non legge il
     JSON, quindi la sincronia va mantenuta a mano se si cambia l'esperimento.
 
-    scale=small (default): R1/R2/R3 attivi + R4 di riserva (scenario
-    originale del Passo 5/14). scale=large: raddoppia a R1/R2/R3/R5/R6/R7
-    attivi + R4/R8 di riserva (Passo 14, richiesto per una demo con piu'
-    traffico), stesso experiment.json: gli R5-R8 semplicemente non vengono
-    spawnati in scale=small. R4/R8 (riserva) non hanno una voce in tasks[]:
-    partono fermi in attesa di un comando su ~nav_control.
+    scale=small (default): R1/R2/R3 attivi + R4 di riserva. scale=large:
+    raddoppia a R1/R2/R3/R5/R6/R7 attivi + R4/R8 di riserva (piu' traffico),
+    stesso experiment.json: gli R5-R8 semplicemente non vengono spawnati in
+    scale=small. R4/R8 (riserva) non hanno una voce in tasks[]: partono
+    fermi in attesa di un comando su ~nav_control.
   -->
   <arg name="model" default="$(env TURTLEBOT3_MODEL)" doc="model type [burger, waffle, waffle_pi]"/>
   <arg name="config_dir" default="/workspace/config"/>
   <arg name="kafka_bootstrap" default="kafka:9092"/>
   <arg name="publish_hz" default="2.0"/>
   <arg name="gui" default="false" doc="gzclient (finestra Gazebo); tenere false, headless"/>
-  <arg name="scale" default="small" doc="small = R1-R4 (originale), large = R1-R8 (raddoppio, Passo 14)"/>
+  <arg name="scale" default="small" doc="small = R1-R4, large = R1-R8"/>
+  <!-- Isola i dati di run diversi della flotta reale nello storico
+       (telemetria/injected_faults): scritto da fleet_control_service.py
+       prima di ogni avvio (/tmp/shf_run_id, stesso meccanismo di "scale"
+       sopra). Vuoto se non passato (es. avvio manuale da CLI). -->
+  <arg name="run_id" default=""/>
 
   <include file="$(find gazebo_ros)/launch/empty_world.launch">
-    <!-- Passo 14: mondo con corridoi fisici stretti su C-F/C-H (invece del
-         world vuoto usato fino ad ora), cosi' capacity=1 nel grafo diventa
-         un vincolo reale. Vedi worlds/warehouse.world e docs/passi/14. -->
+    <!-- Mondo con corridoi fisici stretti su C-F/C-H, cosi' capacity=1 nel
+         grafo diventa un vincolo reale. Vedi worlds/warehouse.world. -->
     <arg name="world_name" value="$(find shf_bringup)/worlds/warehouse.world"/>
     <arg name="paused" value="false"/>
     <arg name="use_sim_time" value="true"/>
@@ -59,6 +62,7 @@
       <param name="robot_id" value="R1"/>
       <param name="config_dir" value="$(arg config_dir)"/>
       <param name="kafka_bootstrap" value="$(arg kafka_bootstrap)"/>
+      <param name="run_id" value="$(arg run_id)"/>
       <param name="publish_hz" value="$(arg publish_hz)"/>
     </node>
   </group>
@@ -89,6 +93,7 @@
       <param name="robot_id" value="R2"/>
       <param name="config_dir" value="$(arg config_dir)"/>
       <param name="kafka_bootstrap" value="$(arg kafka_bootstrap)"/>
+      <param name="run_id" value="$(arg run_id)"/>
       <param name="publish_hz" value="$(arg publish_hz)"/>
     </node>
   </group>
@@ -119,14 +124,17 @@
       <param name="robot_id" value="R3"/>
       <param name="config_dir" value="$(arg config_dir)"/>
       <param name="kafka_bootstrap" value="$(arg kafka_bootstrap)"/>
+      <param name="run_id" value="$(arg run_id)"/>
       <param name="publish_hz" value="$(arg publish_hz)"/>
     </node>
   </group>
 
-  <!-- R4 : robot di riserva (Passo 14), start_node J (30,-10). Nessun task
-       in experiment.json: parte fermo e resta in attesa di un comando su
-       ~nav_control (fleet_control_service.py), non ha una goal_sequence
-       propria da eseguire all'avvio. -->
+  <!-- R4 : robot di riserva, start_node RISERVA1 (-10,8), posizione
+       dedicata non condivisa col reserve_node usato da return-to-service
+       (evita collisioni fisiche). Nessun task in experiment.json: parte
+       fermo e resta in attesa di un comando su ~nav_control
+       (fleet_control_service.py), non ha una goal_sequence propria da
+       eseguire all'avvio. -->
   <group ns="R4">
     <param name="robot_description" command="$(find shf_bringup)/scripts/gen_robot_description.sh $(arg model) R4" />
     <node pkg="robot_state_publisher" type="robot_state_publisher" name="robot_state_publisher" output="screen">
@@ -134,7 +142,7 @@
       <param name="tf_prefix" value="R4" />
     </node>
     <node name="spawn_urdf" pkg="gazebo_ros" type="spawn_model"
-          args="-urdf -model R4 -x 30.0 -y -10.0 -z 0.0 -param robot_description" />
+          args="-urdf -model R4 -x -10.0 -y 8.0 -z 0.0 -param robot_description" />
 
     <include file="$(find shf_bringup)/launch/move_base_no_map.launch">
       <arg name="model" value="$(arg model)"/>
@@ -152,6 +160,7 @@
       <param name="robot_id" value="R4"/>
       <param name="config_dir" value="$(arg config_dir)"/>
       <param name="kafka_bootstrap" value="$(arg kafka_bootstrap)"/>
+      <param name="run_id" value="$(arg run_id)"/>
       <param name="publish_hz" value="$(arg publish_hz)"/>
     </node>
   </group>
@@ -182,6 +191,7 @@
       <param name="robot_id" value="R5"/>
       <param name="config_dir" value="$(arg config_dir)"/>
       <param name="kafka_bootstrap" value="$(arg kafka_bootstrap)"/>
+      <param name="run_id" value="$(arg run_id)"/>
       <param name="publish_hz" value="$(arg publish_hz)"/>
     </node>
   </group>
@@ -212,6 +222,7 @@
       <param name="robot_id" value="R6"/>
       <param name="config_dir" value="$(arg config_dir)"/>
       <param name="kafka_bootstrap" value="$(arg kafka_bootstrap)"/>
+      <param name="run_id" value="$(arg run_id)"/>
       <param name="publish_hz" value="$(arg publish_hz)"/>
     </node>
   </group>
@@ -242,12 +253,15 @@
       <param name="robot_id" value="R7"/>
       <param name="config_dir" value="$(arg config_dir)"/>
       <param name="kafka_bootstrap" value="$(arg kafka_bootstrap)"/>
+      <param name="run_id" value="$(arg run_id)"/>
       <param name="publish_hz" value="$(arg publish_hz)"/>
     </node>
   </group>
 
-  <!-- R8 : robot di riserva #2, attivo solo in scale=large, start_node F
-       (20,10). Nessun task in experiment.json, stesso comportamento di R4. -->
+  <!-- R8 : robot di riserva #2, attivo solo in scale=large, start_node
+       RISERVA2 (-10,-8), posizione dedicata non un nodo di transito
+       condiviso con altri robot. Nessun task in experiment.json, stesso
+       comportamento di R4. -->
   <group ns="R8" if="$(eval arg('scale') == 'large')">
     <param name="robot_description" command="$(find shf_bringup)/scripts/gen_robot_description.sh $(arg model) R8" />
     <node pkg="robot_state_publisher" type="robot_state_publisher" name="robot_state_publisher" output="screen">
@@ -255,7 +269,7 @@
       <param name="tf_prefix" value="R8" />
     </node>
     <node name="spawn_urdf" pkg="gazebo_ros" type="spawn_model"
-          args="-urdf -model R8 -x 20.0 -y 10.0 -z 0.0 -param robot_description" />
+          args="-urdf -model R8 -x -10.0 -y -8.0 -z 0.0 -param robot_description" />
 
     <include file="$(find shf_bringup)/launch/move_base_no_map.launch">
       <arg name="model" value="$(arg model)"/>
@@ -273,6 +287,7 @@
       <param name="robot_id" value="R8"/>
       <param name="config_dir" value="$(arg config_dir)"/>
       <param name="kafka_bootstrap" value="$(arg kafka_bootstrap)"/>
+      <param name="run_id" value="$(arg run_id)"/>
       <param name="publish_hz" value="$(arg publish_hz)"/>
     </node>
   </group>

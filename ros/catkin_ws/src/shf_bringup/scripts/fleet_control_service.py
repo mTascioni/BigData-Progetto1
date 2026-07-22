@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
-"""Servizio di controllo HTTP per la flotta reale (Passo 14): ponte fra il
-backend Node (dashboard/anello automatico) e i topic ROS di controllo di
-kafka_bridge.py (iniezione guasto live, ~fault_inject) e graph_navigator.py
-(assegnazione missione, ~nav_control). Stesso stile di generator_service.py
-(Passo 12): http.server nativo, un processo persistente nel container `ros`,
-niente Flask per poche route -- l'unica differenza e' che questo e' anche un
-nodo rospy (deve pubblicare su topic ROS), non un processo Python puro.
+"""Servizio di controllo HTTP per la flotta reale: ponte fra il backend Node
+(dashboard/anello automatico) e i topic ROS di controllo di kafka_bridge.py
+(iniezione guasto live, ~fault_inject) e graph_navigator.py (assegnazione
+missione, ~nav_control). Stesso stile di generator_service.py: http.server
+nativo, un processo persistente nel container `ros`, niente Flask per poche
+route -- l'unica differenza e' che questo e' anche un nodo rospy (deve
+pubblicare su topic ROS), non un processo Python puro.
 
-Espone anche /sim/start, /sim/stop, /sim/status (2026-07-21): la simulazione
-ROS/Gazebo (`sim_multi_robot`, programma supervisord) non parte piu' in
-automatico all'avvio del container -- viene avviata/fermata da qui su
-richiesta della dashboard, con la scala (small/large) scelta dall'utente.
+Espone anche /sim/start, /sim/stop, /sim/status: la simulazione ROS/Gazebo
+(`sim_multi_robot`, programma supervisord) non parte in automatico all'avvio
+del container -- viene avviata/fermata da qui su richiesta della dashboard,
+con la scala (small/large) scelta dall'utente.
 """
 import json
 import os
 import subprocess
 import threading
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import rospy
@@ -24,6 +25,13 @@ from std_msgs.msg import String
 PORT = int(os.environ.get("FLEET_CONTROL_SERVICE_PORT", "5002"))
 CONFIG_DIR = os.environ.get("CONFIG_DIR", "/workspace/config")
 SCALE_FILE = "/tmp/shf_scale"
+# Stesso pattern del marker della scala: sim_multi_robot.launch non puo'
+# ricevere un argomento dinamico ad ogni `supervisorctl start` (il comando e'
+# statico), quindi si scrive qui un file letto dallo script di lancio.
+# run_id isola i dati di run diversi della flotta reale (stesso motivo del
+# run_id del generatore sintetico: senza, telemetria/previsioni di avvii
+# diversi si mischierebbero nello storico).
+RUN_ID_FILE = "/tmp/shf_run_id"
 SIM_PROGRAM = "sim_multi_robot"
 VALID_SCALES = ("small", "large")
 
@@ -49,6 +57,10 @@ def _publish(topic, payload):
 
 def _nav_control(robot_id, nodes):
     _publish(f"/{robot_id}/graph_navigator/nav_control", {"nodes": nodes})
+
+
+def _nav_freeze(robot_id):
+    _publish(f"/{robot_id}/graph_navigator/nav_control", {"cmd": "freeze"})
 
 
 def _fault_inject(robot_id, fault_type, duration_s, params=None):
@@ -81,7 +93,12 @@ def _sim_status():
             scale = f.read().strip() or "small"
     except FileNotFoundError:
         scale = "small"
-    return {"running": running, "scale": scale, "raw_status": out}
+    try:
+        with open(RUN_ID_FILE) as f:
+            run_id = f.read().strip() or None
+    except FileNotFoundError:
+        run_id = None
+    return {"running": running, "scale": scale, "run_id": run_id, "raw_status": out}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -123,12 +140,21 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, {"ok": True})
 
             elif self.path == "/robot/repair":
-                # Passo 14, anche innescato automaticamente dal backend
+                # Anche innescato automaticamente dal backend
                 # (fleetStateStore.js) su health_anomaly=true.
                 robot_id = body["robot_id"]
                 repair_node = _load_experiment()["repair_node"]
                 _nav_control(robot_id, [repair_node])
                 self._send_json(200, {"ok": True, "repair_node": repair_node})
+
+            elif self.path == "/robot/freeze":
+                # Guasto persistente reale (soglia dura confermata) -- il
+                # robot si ferma dov'e' invece di essere mandato in
+                # riparazione automaticamente, in attesa che l'operatore lo
+                # veda in dashboard e decida (di solito: decommissionarlo).
+                robot_id = body["robot_id"]
+                _nav_freeze(robot_id)
+                self._send_json(200, {"ok": True})
 
             elif self.path == "/robot/return-to-service":
                 robot_id = body["robot_id"]
@@ -139,7 +165,7 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/robot/dispatch-mission":
                 # Manda a robot_id (tipicamente il robot di riserva) la
                 # goal_sequence originale di source_robot_id (quello guasto):
-                # "prende in carico" la missione (Fase D del Passo 14).
+                # "prende in carico" la missione.
                 robot_id = body["robot_id"]
                 source_robot_id = body["source_robot_id"]
                 task = next(
@@ -159,13 +185,16 @@ class Handler(BaseHTTPRequestHandler):
                 if _sim_status()["running"]:
                     self._send_json(409, {"error": "simulazione gia' in corso, fermala prima di cambiare scala"})
                     return
+                run_id = uuid.uuid4().hex[:8]
                 with open(SCALE_FILE, "w") as f:
                     f.write(scale)
+                with open(RUN_ID_FILE, "w") as f:
+                    f.write(run_id)
                 code, out = _supervisorctl("start", SIM_PROGRAM, timeout=30)
                 if code != 0 or "ERROR" in out:
                     self._send_json(502, {"error": out or "avvio fallito"})
                     return
-                self._send_json(200, {"ok": True, "scale": scale})
+                self._send_json(200, {"ok": True, "scale": scale, "run_id": run_id})
 
             elif self.path == "/sim/stop":
                 if not _sim_status()["running"]:

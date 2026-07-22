@@ -38,7 +38,7 @@
         </div>
 
         <div id="sim-tab-real" class="tab-panel">
-          <p class="hint">Passo 5/14: robot ROS/Gazebo veri, con corridoi fisici. Un'anomalia di salute rilevata manda automaticamente il robot in riparazione e dispaccia un robot di riserva sulla sua missione (dettagli e controlli sui singoli robot piu' sotto, in "Flotta reale").</p>
+          <p class="hint">Robot ROS/Gazebo veri, con corridoi fisici. Un'anomalia di salute manda automaticamente il robot in riparazione e dispaccia una riserva sulla sua missione.</p>
           <form id="sim-control-form" class="form-row">
             <label>Scala
               <select id="sim-scale-select">
@@ -52,10 +52,59 @@
             </div>
           </form>
           <div id="sim-status" class="hint">Simulazione ferma.</div>
+
+          <h3>Guasto live (durante il run)</h3>
+          <p class="hint">Guasti iniettati dal vivo sui robot ROS/Gazebo reali: finiscono nella telemetria vera, non in un canale separato.</p>
+          <form id="real-fault-form">
+            <div class="form-row">
+              <label>Robot
+                <select id="real-fault-robot"></select>
+              </label>
+              <label>Guasto
+                <select id="real-fault-type">
+                  <option value="deriva_termica">deriva_termica (motor_temp)</option>
+                  <option value="spike_corrente" selected>spike_corrente (motor_current)</option>
+                  <option value="batteria_collasso">batteria_collasso (battery_pct)</option>
+                  <option value="sensore_bloccato">sensore_bloccato (freeze)</option>
+                  <option value="preavviso_intermittente">preavviso_intermittente (raffiche, motor_current)</option>
+                </select>
+              </label>
+              <label>Durata (s)
+                <input type="number" id="real-fault-duration" value="40" min="5" max="600" />
+              </label>
+            </div>
+            <div class="form-actions">
+              <button type="submit">Inietta guasto ora</button>
+            </div>
+          </form>
+
+          <h3>Perturbazione live (rumore sensori)</h3>
+          <p class="hint">Non un guasto: rumore extra su un canale, per generare falsi positivi controllati e verificare che il sistema li impari a filtrare (<code>offline/adaptive_thresholds.py</code>). Non finisce in <code>injected_faults</code> -- non e' ground truth di un guasto vero.</p>
+          <form id="real-perturbation-form">
+            <div class="form-row">
+              <label>Robot
+                <select id="real-perturbation-robot"></select>
+              </label>
+              <label>Canale
+                <select id="real-perturbation-channel">
+                  <option value="motor_temp">motor_temp</option>
+                  <option value="motor_current" selected>motor_current</option>
+                  <option value="battery_pct">battery_pct</option>
+                </select>
+              </label>
+              <label>Durata (s)
+                <input type="number" id="real-perturbation-duration" value="30" min="5" max="600" />
+              </label>
+            </div>
+            <div class="form-actions">
+              <button type="submit">Inietta perturbazione ora</button>
+            </div>
+          </form>
+          <div id="real-fleet-status-msg" class="hint"></div>
         </div>
 
         <div id="sim-tab-synthetic" class="tab-panel" hidden>
-          <p class="hint">Passo 12: robot-token generati via software (nessun ROS/Gazebo), utile per test di carico e scenari con guasti pianificati. Non tocca la simulazione ROS/Gazebo reale.</p>
+          <p class="hint">Robot simulati via software, senza ROS/Gazebo: utile per test di carico e scenari con guasti pianificati. Non interferisce con la flotta reale.</p>
           <form id="generator-form">
             <div class="form-row">
               <label>Topologia
@@ -85,6 +134,53 @@
             </div>
           </form>
           <div id="gen-status" class="hint">Nessun run in corso.</div>
+
+          <h3>Guasto live (durante il run)</h3>
+          <form id="gen-live-fault-form">
+            <div class="form-row">
+              <label>Robot
+                <select id="gen-live-fault-robot" disabled></select>
+              </label>
+              <label>Guasto
+                <select id="gen-live-fault-type">
+                  <option value="deriva_termica">deriva_termica (motor_temp)</option>
+                  <option value="spike_corrente" selected>spike_corrente (motor_current)</option>
+                  <option value="batteria_collasso">batteria_collasso (battery_pct)</option>
+                  <option value="sensore_bloccato">sensore_bloccato (freeze)</option>
+                  <option value="preavviso_intermittente">preavviso_intermittente (raffiche, motor_current)</option>
+                </select>
+              </label>
+              <label>Durata (s)
+                <input type="number" id="gen-live-fault-duration" value="40" min="5" max="600" />
+              </label>
+            </div>
+            <div class="form-actions">
+              <button type="submit" id="gen-live-fault-btn" disabled>Inietta guasto ora</button>
+            </div>
+          </form>
+
+          <h3>Perturbazione live (rumore sensori)</h3>
+          <form id="gen-live-perturbation-form">
+            <div class="form-row">
+              <label>Robot
+                <select id="gen-live-perturbation-robot" disabled></select>
+              </label>
+              <label>Canale
+                <select id="gen-live-perturbation-channel">
+                  <option value="motor_temp">motor_temp</option>
+                  <option value="motor_current" selected>motor_current</option>
+                  <option value="battery_pct">battery_pct</option>
+                </select>
+              </label>
+              <label>Durata (s)
+                <input type="number" id="gen-live-perturbation-duration" value="30" min="5" max="600" />
+              </label>
+            </div>
+            <div class="form-actions">
+              <button type="submit" id="gen-live-perturbation-btn" disabled>Inietta perturbazione ora</button>
+            </div>
+          </form>
+          <div id="gen-live-status-msg" class="hint"></div>
         </div>
       </section>
 
@@ -121,47 +217,24 @@
 
     <section class="card real-fleet-card">
       <h2>Flotta reale — dettaglio</h2>
-      <p class="hint">Guasti live sui robot ROS/Gazebo reali (finiscono nella telemetria vera, li trova il modello, non un canale a parte).</p>
+      <p class="hint">Guasti e perturbazioni si iniettano dal pannello "Avvia simulazione" qui sopra, tab "Flotta reale".</p>
 
       <table id="real-fleet-status">
         <thead><tr><th>Robot</th><th>Stato</th><th>Goal</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
-
-      <form id="real-fault-form">
-        <div class="form-row">
-          <label>Robot
-            <select id="real-fault-robot"></select>
-          </label>
-          <label>Guasto
-            <select id="real-fault-type">
-              <option value="deriva_termica">deriva_termica (motor_temp)</option>
-              <option value="spike_corrente" selected>spike_corrente (motor_current)</option>
-              <option value="batteria_collasso">batteria_collasso (battery_pct)</option>
-              <option value="sensore_bloccato">sensore_bloccato (freeze)</option>
-            </select>
-          </label>
-          <label>Durata (s)
-            <input type="number" id="real-fault-duration" value="40" min="5" max="600" />
-          </label>
-        </div>
-        <div class="form-actions">
-          <button type="submit">Inietta guasto ora</button>
-        </div>
-      </form>
-      <div id="real-fleet-status-msg" class="hint"></div>
     </section>
 
     <section class="card">
       <h2>Eventi recenti</h2>
-      <p class="hint">Deadlock/livelock rilevati in streaming (Passo 7), evidenziati anche sulla mappa per ~8s.</p>
+      <p class="hint">Deadlock e livelock rilevati in streaming, evidenziati anche sulla mappa per ~8s.</p>
       <ul id="events-list"></ul>
       <p id="events-empty" class="hint">Nessun evento comportamentale rilevato finora.</p>
     </section>
 
     <section class="card">
       <h2>Robot a rischio</h2>
-      <p class="hint">Previsioni offline (regressione lineare), aggiornate ogni 5s.</p>
+      <p class="hint">Previsioni offline (regressione lineare, aggiornate ogni 5s) + previsioni live dallo streaming (istantanee, scompaiono da sole dopo 2min di inattivit&agrave;).</p>
       <table id="predictions-table">
         <thead>
           <tr><th>Robot</th><th>Canale</th><th>Valore</th><th>Soglia</th><th>Lead time</th></tr>
@@ -170,13 +243,28 @@
       </table>
       <p id="predictions-empty" class="hint" hidden>Nessun robot con un trend a rischio al momento.</p>
     </section>
+
+    <section class="card raw-stream-card">
+      <h2>Streaming live (topic Kafka)</h2>
+      <p class="hint">Messaggi campionati in tempo reale (al piu' uno ogni ~200ms per topic), solo per vedere cosa passa -- non salvati da nessuna parte.</p>
+      <div class="tab-bar" id="raw-stream-tabs" role="tablist">
+        <button type="button" class="tab-btn active" data-topic="telemetry">telemetry</button>
+        <button type="button" class="tab-btn" data-topic="anomalies">anomalies</button>
+        <button type="button" class="tab-btn" data-topic="injected_faults">injected_faults</button>
+        <button type="button" class="tab-btn" data-topic="fleet_state">fleet_state</button>
+      </div>
+      <div class="form-actions">
+        <button type="button" id="raw-stream-pause">Pausa</button>
+      </div>
+      <pre id="raw-stream-log" class="raw-stream-log"></pre>
+    </section>
   </main>
 
-  <h2 class="section-title">Esperimenti (Passo 13)</h2>
+  <h2 class="section-title">Esperimenti</h2>
   <main class="eval-row">
     <section class="card eval-card" id="eval-effectiveness-card">
       <h2>Risultati sperimentazioni — effectiveness</h2>
-      <p class="hint"><code>eval/run_effectiveness.py</code>: precision/recall della detection, accuratezza delle previsioni, execution accuracy del layer TAG. Si lancia on-demand: i risultati compaiono qui man mano che ogni sotto-esperimento finisce.</p>
+      <p class="hint"><code>eval/run_effectiveness.py</code>: precision/recall della detection, accuratezza della previsione offline e di quella live in streaming, execution accuracy del layer TAG. Si lancia on-demand: i risultati compaiono qui man mano che ogni sotto-esperimento finisce.</p>
       <div class="form-actions">
         <button type="button" id="eval-effectiveness-run-btn">Esegui ora</button>
       </div>
@@ -187,7 +275,7 @@
 
     <section class="card eval-card" id="eval-efficiency-card">
       <h2>Risultati sperimentazioni — efficiency</h2>
-      <p class="hint"><code>eval/run_efficiency.py</code>: throughput a carico crescente, latenza onset&rarr;alert. Si lancia on-demand: i risultati compaiono qui man mano che ogni sotto-esperimento finisce.</p>
+      <p class="hint"><code>eval/run_efficiency.py</code>: throughput a carico crescente, latenza onset&rarr;alert, detection sotto carico (scalabilit&agrave;), latenza del loop di auto-riparazione sulla flotta reale (salta se non &egrave; attiva). Si lancia on-demand: i risultati compaiono qui man mano che ogni sotto-esperimento finisce.</p>
       <div class="form-actions">
         <button type="button" id="eval-efficiency-run-btn">Esegui ora</button>
       </div>

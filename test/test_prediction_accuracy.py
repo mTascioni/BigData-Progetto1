@@ -1,5 +1,5 @@
-"""Accuratezza della previsione (Passo 9, regressione lineare): dati
-sintetici con un trend NOTO analiticamente (non serve aspettare uno storico
+"""Accuratezza della previsione (regressione lineare): dati sintetici con
+un trend NOTO analiticamente (non serve aspettare uno storico
 reale), scritti in una cartella temporanea isolata (mai in /data, per non
 sporcare lo storico reale persistito da persistence_job.py), e confrontati
 con l'istante di superamento soglia calcolato a mano.
@@ -112,8 +112,7 @@ def test_nessuna_previsione_su_canale_stabile_nominale():
 
 def test_trend_nella_direzione_sbagliata_non_genera_previsione():
     """motor_temp che SCENDE non deve mai generare una previsione di
-    superamento della soglia critica 'above' (85 C) -- gia' verificato a
-    mano al Passo 9, qui diventa un regression test automatico."""
+    superamento della soglia critica 'above' (85 C)."""
     start_ts_ms = 1_800_000_000_000
     with tempfile.TemporaryDirectory() as tmp:
         _write_synthetic_ramp(tmp, "TESTPRED3", start_ts_ms, 300, step_s=2,

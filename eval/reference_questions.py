@@ -1,4 +1,4 @@
-"""Domande di riferimento per l'execution accuracy del layer TAG (Passo 10/13).
+"""Domande di riferimento per l'execution accuracy del layer TAG.
 
 Ogni voce ha una domanda in linguaggio naturale e una query SQL di
 "verita' diretta" scritta a mano: eseguita sugli stessi dati nello stesso

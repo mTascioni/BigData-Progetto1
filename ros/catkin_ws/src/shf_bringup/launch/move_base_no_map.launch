@@ -1,13 +1,13 @@
 <launch>
   <!--
     Variante di turtlebot3_navigation/launch/move_base.launch senza map_server/AMCL:
-    il Passo 3 e' un roadmap logico (config/warehouse_graph.json), non richiede una
-    mappa metrica delle pareti. Il global_costmap qui e' vuoto (nessun static_layer)
+    la navigazione segue un roadmap logico (config/warehouse_graph.json), non richiede
+    una mappa metrica delle pareti. Il global_costmap qui e' vuoto (nessun static_layer)
     e vive nel frame "odom", su cui la simulazione e' accurata.
 
     odom_frame/base_frame/base_scan_frame di default valgono per il caso
-    single-robot (Passo 3/4, nessun namespace). Nel multi-robot (Passo 5) il
-    launch chiamante passa i frame con prefisso "<robot_id>/..." perche' tf2
+    single-robot (nessun namespace). Nel multi-robot il launch chiamante
+    passa i frame con prefisso "<robot_id>/..." perche' tf2
     non applica automaticamente il namespace roslaunch ai frame_id: vanno
     resi univoci esplicitamente, altrimenti i tf di piu' robot collidono
     sullo stesso frame "odom"/"base_footprint" globale.

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Valutazione sperimentale — effectiveness (Passo 13).
+"""Valutazione sperimentale — effectiveness.
 
 Tre esperimenti, ciascuno scrive CSV + un grafico in /data/eval/<run_id>/:
 1. Detection: precision/recall/F1 delle anomalie di salute su un set di
    robot con guasto noto e un set senza, generati in modo controllato.
 2. Previsione: errore (secondi) fra il lead time previsto dalla regressione
-   lineare (Passo 9) e quello vero, calcolato analiticamente, su piu'
+   lineare e quello vero, calcolato analiticamente, su piu'
    scenari di trend sintetici con pendenza nota.
 3. TAG: execution accuracy sulle domande di riferimento
    (eval/reference_questions.py), confrontando la risposta con una query
@@ -157,6 +157,76 @@ def run_prediction_experiment(run_dir):
     return {"mae_lead_time_s": mae, "scenarios": len(rows), "missing": sum(1 for r in rows if r["error_s"] is None)}
 
 
+# ------------------------------------------------------- previsione live
+def run_live_prediction_experiment(run_dir):
+    """Complementare a run_prediction_experiment (che valuta solo la
+    regressione offline di predictive/forecast_failures.py): qui si misura
+    il quarto operatore streaming di detection_job.py (soglia morbida,
+    "preavviso_intermittente"), sia come detection (precision/recall sulle
+    anomalie type=previsione) sia come latenza onset->previsione, stessa
+    tecnica di misura (e stesso limite: tempo di attesa fisso, non l'istante
+    esatto di arrivo) di run_efficiency.run_latency_trials."""
+    print("== Previsione live: detection streaming + latenza onset->previsione ==")
+    n_robots = 6
+    faulty_idx = {0, 2, 4}
+    prefix = "EVALPREV"
+    start_time_s = 3
+    robot_ids = [f"{prefix}{i:05d}" for i in range(n_robots)]
+    faults = [
+        {"fault_type": "preavviso_intermittente", "robot_id": rid, "start_time_s": start_time_s, "duration_s": 60}
+        for i, rid in enumerate(robot_ids) if i in faulty_idx
+    ]
+
+    # injected_faults riceve il record solo alla DISATTIVAZIONE del guasto
+    # (synthetic_generator.py, FaultInjector._deactivate), non all'avvio --
+    # con duration_s=60 aspettarlo qui triplicherebbe il tempo dell'esperimento
+    # per un dato che possiamo gia' calcolare: il generatore fa scattare i
+    # guasti pianificati sul proprio orologio interno a partire dall'istante
+    # di questa chiamata, quindi l'onset reale e' t_launch + start_time_s.
+    anomaly_consumer = start_consumer("anomalies")
+    t_launch = time.time()
+    start_generator({"num_robots": n_robots, "hz": 3, "duration_s": 70, "robot_id_prefix": prefix, "faults": faults})
+    onset_ts = t_launch + start_time_s
+
+    previsione_events = collect_messages(
+        anomaly_consumer, timeout_s=65,
+        predicate=lambda e: e.get("type") == "previsione" and str(e.get("robot_id", "")).startswith(prefix),
+    )
+    t_received = time.time()
+    wait_generator_done(15)
+
+    flagged = {e["robot_id"] for e in previsione_events}
+    rows = []
+    tp = fp = fn = tn = 0
+    for i, rid in enumerate(robot_ids):
+        has_fault = i in faulty_idx
+        detected = rid in flagged
+        if has_fault and detected:
+            tp += 1
+        elif has_fault and not detected:
+            fn += 1
+        elif not has_fault and detected:
+            fp += 1
+        else:
+            tn += 1
+        latency_s = (t_received - onset_ts) if (has_fault and detected) else None
+        rows.append({"robot_id": rid, "has_fault": has_fault, "detected": detected, "latency_s": latency_s})
+
+    precision = tp / (tp + fp) if (tp + fp) else float("nan")
+    recall = tp / (tp + fn) if (tp + fn) else float("nan")
+    f1 = 2 * precision * recall / (precision + recall) if precision and recall and (precision + recall) else float("nan")
+    latencies = [r["latency_s"] for r in rows if r["latency_s"] is not None]
+    avg_latency = sum(latencies) / len(latencies) if latencies else None
+
+    with open(os.path.join(run_dir, "live_prediction_robots.csv"), "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=["robot_id", "has_fault", "detected", "latency_s"])
+        w.writeheader()
+        w.writerows(rows)
+
+    print(f"  precision={precision:.2f} recall={recall:.2f} f1={f1:.2f} (TP={tp} FP={fp} FN={fn} TN={tn}), latenza media onset->previsione {avg_latency}")
+    return {"precision": precision, "recall": recall, "f1": f1, "tp": tp, "fp": fp, "fn": fn, "tn": tn, "avg_latency_s": avg_latency}
+
+
 # --------------------------------------------------------------------- TAG
 def row_matches(tag_row, gt_values, tol=0.5):
     tag_values = list(tag_row.values())
@@ -221,9 +291,13 @@ def main():
 
     detection_summary = run_detection_experiment(run_dir)
     prediction_summary = run_prediction_experiment(run_dir)
+    live_prediction_summary = run_live_prediction_experiment(run_dir)
     tag_summary = run_tag_experiment(run_dir)
 
-    summary = {"detection": detection_summary, "prediction": prediction_summary, "tag": tag_summary}
+    summary = {
+        "detection": detection_summary, "prediction": prediction_summary,
+        "live_prediction": live_prediction_summary, "tag": tag_summary,
+    }
     update_index("effectiveness", run_id, summary)
     print(f"\nFatto. Risultati in {run_dir}")
 

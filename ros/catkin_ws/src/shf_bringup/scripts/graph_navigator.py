@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Naviga un robot sul grafo del magazzino (config/warehouse_graph.json).
 
-All'avvio esegue la goal_sequence definita per lui in config/experiment.json
-(comportamento originale, Passo 3/5). In piu' (Passo 14), ascolta un topic
-di controllo (~nav_control, std_msgs/String con un JSON {"nodes": [...]})
+All'avvio esegue la goal_sequence definita per lui in config/experiment.json.
+Ascolta anche un topic di controllo (~nav_control, std_msgs/String con un
+JSON {"nodes": [...]})
 che puo' interrompere la missione in corso e assegnarne una nuova: usato dal
 fleet_control_service.py per mandare un robot in riparazione o per dare a
 un robot di riserva (es. R4) la missione di uno guasto -- stesso meccanismo
@@ -65,6 +65,18 @@ class MissionRunner:
     def assign(self, node_ids):
         with self._lock:
             self._pending = list(node_ids)
+        self.client.cancel_goal()
+        self._new_mission.set()
+
+    def freeze(self):
+        """Annulla il goal corrente e non assegna nulla di nuovo: il robot
+        resta fermo dov'e', in attesa di un comando futuro (guasto persistente
+        reale -- a differenza di assign(), qui non c'e' una missione nuova da
+        eseguire, solo l'interruzione di quella corrente). Stesso meccanismo
+        di risveglio di run_forever(): _pending resta None, quindi il loop
+        non chiama _run_sequence()."""
+        with self._lock:
+            self._pending = None
         self.client.cancel_goal()
         self._new_mission.set()
 
@@ -146,8 +158,16 @@ def main():
     def on_control(msg):
         try:
             payload = json.loads(msg.data)
+        except ValueError as exc:
+            rospy.logerr("%s: messaggio di controllo non valido (%s): %s", robot_id, exc, msg.data)
+            return
+        if payload.get("cmd") == "freeze":
+            rospy.loginfo("%s: freeze richiesto, resto fermo dove sono", robot_id)
+            runner.freeze()
+            return
+        try:
             nodes = payload["nodes"]
-        except (ValueError, KeyError) as exc:
+        except KeyError as exc:
             rospy.logerr("%s: messaggio di controllo non valido (%s): %s", robot_id, exc, msg.data)
             return
         runner.assign(nodes)

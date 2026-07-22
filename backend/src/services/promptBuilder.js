@@ -1,6 +1,6 @@
-// Costruisce il prompt per il text-to-SQL (Passo 10): schema intero delle
-// 4 tabelle Parquet + few-shot, in dialetto Spark SQL (il motore che
-// esegue davvero la query, streaming/query_service.py).
+// Costruisce il prompt per il text-to-SQL: schema intero delle 4 tabelle
+// Parquet + few-shot, in dialetto Spark SQL (il motore che esegue davvero
+// la query, streaming/query_service.py).
 
 const SCHEMA = `Hai a disposizione 4 tabelle Spark SQL (viste su file Parquet), tutte relative a una flotta di robot AGV (TurtleBot3) in un magazzino:
 
@@ -30,7 +30,7 @@ TABELLA anomalies (eventi di anomalia rilevati in tempo reale, Spark Structured 
   current_edge STRING       -- arco conteso (solo type='deadlock')
   robots ARRAY<STRING>      -- robot coinvolti nel conflitto (solo type='deadlock')
 
-TABELLA injected_faults (ground truth: guasti iniettati apposta per i test, Passo 6):
+TABELLA injected_faults (ground truth: guasti iniettati apposta per i test):
   fault_id STRING, robot_id STRING
   fault_type STRING       -- 'deriva_termica' | 'spike_corrente' | 'batteria_collasso' | 'sensore_bloccato'
   start_time_s DOUBLE, end_time_s DOUBLE   -- finestra pianificata, secondi relativi all'esperimento
@@ -40,7 +40,7 @@ TABELLA injected_faults (ground truth: guasti iniettati apposta per i test, Pass
                 frozen_channel: STRING, freeze_duration_s: DOUBLE>  -- accedi con params.nome_campo
   start_ts BIGINT, end_ts BIGINT   -- finestra REALE (epoch ms) di quando il guasto e' stato attivo
 
-TABELLA predictions (previsioni offline di guasto, Passo 9):
+TABELLA predictions (previsioni offline di guasto):
   robot_id STRING, channel STRING   -- channel: 'motor_temp' | 'motor_current' | 'battery_pct'
   predicted_at_ts BIGINT   -- epoch ms, quando e' stata fatta la previsione
   current_value DOUBLE, slope_per_min DOUBLE, critical_threshold DOUBLE

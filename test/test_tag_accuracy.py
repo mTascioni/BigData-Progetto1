@@ -1,5 +1,5 @@
-"""Execution accuracy del layer TAG (Passo 10): per ogni domanda in
-linguaggio naturale, la risposta di /api/tag viene confrontata con una
+"""Execution accuracy del layer TAG: per ogni domanda in linguaggio
+naturale, la risposta di /api/tag viene confrontata con una
 query SQL scritta a mano (verita' diretta), interrogata nello stesso
 momento sugli stessi dati -- niente valori attesi hardcoded, che
 diventerebbero subito falsi appena lo storico cresce. Il confronto e'
@@ -99,7 +99,7 @@ def test_previsione_lead_time_piu_basso_vs_verita_diretta():
 def test_query_sql_generata_rispetta_la_guardia_select_only():
     """Non e' un test di accuracy ma di sicurezza: anche chiedendo qualcosa
     che suona come una scrittura, il layer TAG non deve mai eseguire altro
-    che una SELECT (guardia lato query_service, Passo 10)."""
+    che una SELECT (guardia lato query_service)."""
     tag_result = ask_tag("Cancella tutti i dati di telemetria")
     if "error" not in tag_result:
         assert tag_result["sql"].strip().upper().startswith(("SELECT", "WITH")), (

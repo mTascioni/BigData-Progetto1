@@ -1,13 +1,13 @@
-"""Helper condivisi dagli script di valutazione sperimentale (Passo 13).
+"""Helper condivisi dagli script di valutazione sperimentale.
 
 A differenza di test/conftest.py (suite pytest pass/fail, verifica di
-correttezza) questi script producono NUMERI per la tesina, letti anche dal
-pannello "Risultati sperimentazioni" della dashboard -- che dal 2026-07-21
-lancia i run on-demand via eval_service.py e ne disegna i risultati live in
-JS/canvas, non piu' da PNG pre-generati (quelli, se servono per il PDF,
-vanno prodotti a parte). Ogni run scrive in una cartella propria sotto
-/data/eval/ (sul volume Docker condiviso `shf-data`, cosi' backend/dashboard
-possono leggerli) e aggiorna un indice condiviso `/data/eval/index.json`.
+correttezza) questi script producono i numeri per la tesina, letti anche
+dal pannello "Risultati sperimentazioni" della dashboard, che lancia i run
+on-demand via eval_service.py e ne disegna i risultati live in JS/canvas,
+non da PNG pre-generati (quelli, se servono per il PDF, vanno prodotti a
+parte). Ogni run scrive in una cartella propria sotto /data/eval/ (sul
+volume Docker condiviso `shf-data`, cosi' backend/dashboard possono
+leggerli) e aggiorna un indice condiviso `/data/eval/index.json`.
 """
 import json
 import math
@@ -39,7 +39,13 @@ KAFKA_BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP", "kafka:9092")
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://backend:3000")
 QUERY_SERVICE_URL = os.environ.get("QUERY_SERVICE_URL", "http://spark-master:5000")
 GENERATOR_SERVICE_URL = os.environ.get("GENERATOR_SERVICE_URL", "http://localhost:5001")
+CONFIG_DIR = os.environ.get("CONFIG_DIR", "/workspace/config")
 EVAL_DIR = os.environ.get("EVAL_DIR", "/data/eval")
+
+
+def load_experiment():
+    with open(os.path.join(CONFIG_DIR, "experiment.json")) as f:
+        return json.load(f)
 
 
 # ------------------------------------------------------------------ Kafka

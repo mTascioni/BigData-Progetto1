@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Job PySpark Structured Streaming di detection real-time (Passo 7).
+"""Job PySpark Structured Streaming di detection real-time.
 
 Consuma il topic Kafka `telemetry`. Tre meccanismi di detection, tre
 query streaming indipendenti sulla stessa sorgente:
@@ -18,9 +18,9 @@ query streaming indipendenti sulla stessa sorgente:
   `blocked` sullo stesso arco nella stessa finestra.
 
 Le finestre livelock/deadlock riusano `task_state`/`current_edge` gia'
-calcolati dal nodo-ponte (Passo 4-5); la "distanza sul grafo dal
-goal_node" e' calcolata qui con Floyd-Warshall sul piccolo grafo del
-magazzino (config/warehouse_graph.json), broadcastata una volta sola.
+calcolati dal nodo-ponte; la "distanza sul grafo dal goal_node" e'
+calcolata qui con Floyd-Warshall sul piccolo grafo del magazzino
+(config/warehouse_graph.json), broadcastata una volta sola.
 """
 import json
 import math
@@ -45,7 +45,7 @@ CONFIG_DIR = os.environ.get("CONFIG_DIR", "/workspace/config")
 MODEL_PATH = os.environ.get("MODEL_PATH", os.path.join(os.path.dirname(__file__), "models", "isolation_forest.pkl"))
 CHECKPOINT_DIR = os.environ.get("CHECKPOINT_DIR", "/tmp/shf-checkpoints")
 # Se presente, sovrascrive le soglie di default -- prodotto da
-# offline/adaptive_thresholds.py (Passo 8), il "feedback verso lo streaming".
+# offline/adaptive_thresholds.py, il feedback verso lo streaming.
 ADAPTIVE_THRESHOLDS_PATH = os.environ.get("ADAPTIVE_THRESHOLDS_PATH", "/data/adaptive_thresholds.json")
 
 DEFAULT_THRESHOLDS = {
@@ -56,9 +56,9 @@ DEFAULT_THRESHOLDS = {
 
 
 def load_thresholds(path):
-    """Soglie di salute: quelle adattive del Passo 8 se disponibili
-    (calibrate sullo storico reale per ridurre i falsi positivi),
-    altrimenti i default fissati a mano qui sopra."""
+    """Soglie di salute: quelle adattive se disponibili (calibrate sullo
+    storico reale per ridurre i falsi positivi), altrimenti i default
+    fissati a mano qui sopra."""
     try:
         with open(path) as f:
             adaptive = json.load(f)
@@ -98,11 +98,19 @@ LIVELOCK_STATE_SCHEMA = StructType([
     StructField("ref_time_ms", LongType()),
     StructField("stall_start_ms", LongType()),  # -1 = nessuno stallo in corso
     StructField("alerted", BooleanType()),
+    # goal_node del campionamento di riferimento (fix falsi positivi, vedi
+    # sotto): senza, un cambio di goal fra due campionamenti fa sembrare
+    # "nessun progresso" (o un arretramento) anche se il robot si e' mosso
+    # normalmente -- osservato soprattutto sul generatore sintetico, che
+    # assegna un nuovo goal_node a caso ogni volta che un robot arriva,
+    # molto piu' spesso di un robot ROS reale (sequenza fissa e finita).
+    StructField("ref_goal_node", StringType()),
 ])
 
 LIVELOCK_OUTPUT_SCHEMA = StructType([
     StructField("type", StringType()),
     StructField("robot_id", StringType()),
+    StructField("run_id", StringType()),
     StructField("window_start", TimestampType()),
     StructField("window_end", TimestampType()),
     StructField("min_dist", DoubleType()),
@@ -126,24 +134,32 @@ def _livelock_state_func(key, pdf_iter, state):
     pdf = pdf.sort_values("event_time")
 
     if state.exists:
-        ref_dist, ref_time_ms, stall_start_ms, alerted = state.get
+        ref_dist, ref_time_ms, stall_start_ms, alerted, ref_goal_node = state.get
     else:
-        ref_dist, ref_time_ms, stall_start_ms, alerted = None, None, -1, False
+        ref_dist, ref_time_ms, stall_start_ms, alerted, ref_goal_node = None, None, -1, False, None
 
     out_rows = []
     min_d = max_d = None
     n_msgs = 0
     last_event_ms = ref_time_ms or 0
+    run_id = None
 
     for row in pdf.itertuples():
         t_ms = int(row.event_time.timestamp() * 1000)
         last_event_ms = max(last_event_ms, t_ms)
         d = row.dist_to_goal
         moving = row.task_state == "moving"
+        run_id = getattr(row, "run_id", None) or run_id
         if d is None:
             continue
-        if ref_time_ms is None:
-            ref_dist, ref_time_ms = d, t_ms
+        # Il goal e' cambiato dal campionamento di riferimento: la distanza
+        # verso un nuovo obiettivo non e' confrontabile con quella verso il
+        # vecchio (quasi raggiunto), sembrerebbe un arretramento anche se il
+        # robot si muove normalmente. Si tratta come un nuovo riferimento,
+        # nessun calcolo di progresso in questo giro -- stesso trattamento
+        # del primissimo messaggio mai visto per questo robot.
+        if ref_time_ms is None or row.goal_node != ref_goal_node:
+            ref_dist, ref_time_ms, ref_goal_node = d, t_ms, row.goal_node
             continue
         elapsed_s = (t_ms - ref_time_ms) / 1000.0
         if elapsed_s < LIVELOCK_CHECK_INTERVAL_S:
@@ -161,7 +177,7 @@ def _livelock_state_func(key, pdf_iter, state):
             stall_s = (t_ms - stall_start_ms) / 1000.0
             if not alerted and stall_s >= LIVELOCK_CONFIRM_DURATION_S:
                 out_rows.append({
-                    "type": "livelock", "robot_id": robot_id,
+                    "type": "livelock", "robot_id": robot_id, "run_id": run_id,
                     "window_start": pd.Timestamp(stall_start_ms, unit="ms"),
                     "window_end": pd.Timestamp(t_ms, unit="ms"),
                     "min_dist": float(min_d), "max_dist": float(max_d),
@@ -170,9 +186,9 @@ def _livelock_state_func(key, pdf_iter, state):
                 alerted = True
         else:
             stall_start_ms, alerted, min_d, max_d, n_msgs = -1, False, None, None, 0
-        ref_dist, ref_time_ms = d, t_ms
+        ref_dist, ref_time_ms, ref_goal_node = d, t_ms, row.goal_node
 
-    state.update((ref_dist, ref_time_ms, stall_start_ms, alerted))
+    state.update((ref_dist, ref_time_ms, stall_start_ms, alerted, ref_goal_node))
     state.setTimeoutTimestamp(last_event_ms + int(LIVELOCK_STATE_TIMEOUT_S * 1000))
 
     if out_rows:
@@ -180,6 +196,134 @@ def _livelock_state_func(key, pdf_iter, state):
     return iter([pd.DataFrame(columns=[f.name for f in LIVELOCK_OUTPUT_SCHEMA.fields])])
 
 DEADLOCK_WINDOW, DEADLOCK_SLIDE = "20 seconds", "10 seconds"
+
+# ---------------------------------------------------------------- previsione
+# Un preavviso (guasto "preavviso_intermittente", vedi kafka_bridge.py
+# /synthetic_generator.py) porta un canale oltre una soglia "morbida" solo a
+# raffiche saltuarie, non in modo continuo come i guasti "duri" gia'
+# esistenti -- l'anomalia non e' ancora rilevabile a soglia fissa (il valore
+# torna nominale fra una raffica e l'altra) ma il PATTERN delle raffiche e'
+# un indicatore che il robot si sta avvicinando a un guasto vero. Si conta,
+# per canale e per robot, quante volte il valore ha superato la soglia
+# morbida negli ultimi PREAVVISO_WINDOW_S secondi (event time); se il numero
+# di raffiche osservate supera PREAVVISO_MIN_CROSSINGS si emette una
+# previsione. Stesso operatore stateful del livelock (applyInPandasWithState),
+# stesso motivo: serve memoria fra i micro-batch, non solo il messaggio
+# corrente.
+#
+# La soglia morbida e' derivata da quella dura con un margine fisso (non
+# un'altra calibrazione a parte): abbastanza per intercettare l'escursione di
+# una raffica senza scattare sul rumore nominale (vedi DEFAULT_THRESHOLDS).
+PREAVVISO_SOFT_MARGIN = {
+    "motor_temp": -10.0,      # soglia dura - 10 (es. 55 -> 45)
+    "motor_current": -0.5,    # soglia dura - 0.5 (es. 2.5 -> 2.0)
+    "battery_pct": 10.0,      # soglia dura + 10 (es. 20 -> 30, "sotto" e' il guasto)
+}
+PREAVVISO_DIRECTION = {"motor_temp": "above", "motor_current": "above", "battery_pct": "below"}
+PREAVVISO_WINDOW_S = 60.0
+PREAVVISO_MIN_CROSSINGS = 3  # almeno 3 raffiche osservate nella finestra per confermare un trend, non rumore isolato
+PREAVVISO_STATE_TIMEOUT_S = 90.0
+# Stima conservativa del lead time riportata all'utente (non una regressione
+# vera come in predictive/forecast_failures.py -- qui il segnale e' a
+# raffiche, non un trend continuo adatto a un fit lineare stabile): il tempo
+# restante prima che il guasto pieno "confermi" e' assunto pari alla finestra
+# di osservazione stessa, un limite superiore prudente, non una previsione di
+# precisione.
+PREAVVISO_LEAD_TIME_ESTIMATE_S = PREAVVISO_WINDOW_S
+
+PREAVVISO_CHANNELS = ["motor_temp", "motor_current", "battery_pct"]
+
+PREAVVISO_STATE_SCHEMA = StructType([
+    StructField("crossings_ms", ArrayType(ArrayType(LongType()))),  # una lista di timestamp per canale, stesso ordine di PREAVVISO_CHANNELS
+    StructField("alerted_channels", ArrayType(StringType())),
+])
+
+PREAVVISO_OUTPUT_SCHEMA = StructType([
+    StructField("type", StringType()),
+    StructField("robot_id", StringType()),
+    StructField("run_id", StringType()),
+    StructField("channel", StringType()),
+    StructField("current_value", DoubleType()),
+    StructField("critical_threshold", DoubleType()),
+    StructField("lead_time_s", DoubleType()),
+    StructField("n_crossings", IntegerType()),
+])
+
+
+def make_previsione_state_func(hard_thresholds):
+    soft_thresholds = {
+        ch: hard_thresholds[f"{ch}_threshold_c" if ch == "motor_temp" else
+                            f"{ch}_threshold_a" if ch == "motor_current" else
+                            "battery_low_threshold_pct"] + PREAVVISO_SOFT_MARGIN[ch]
+        for ch in PREAVVISO_CHANNELS
+    }
+    hard_by_channel = {
+        "motor_temp": hard_thresholds["motor_temp_threshold_c"],
+        "motor_current": hard_thresholds["motor_current_threshold_a"],
+        "battery_pct": hard_thresholds["battery_low_threshold_pct"],
+    }
+
+    def _crosses(channel, value):
+        if value is None:
+            return False
+        soft = soft_thresholds[channel]
+        return value > soft if PREAVVISO_DIRECTION[channel] == "above" else value < soft
+
+    def _fn(key, pdf_iter, state):
+        (robot_id,) = key
+        pdf = pd.concat(pdf_iter, ignore_index=True)
+
+        if state.hasTimedOut:
+            state.remove()
+            return iter([pd.DataFrame(columns=[f.name for f in PREAVVISO_OUTPUT_SCHEMA.fields])])
+
+        pdf = pdf.sort_values("event_time")
+
+        if state.exists:
+            crossings_ms, alerted_channels = state.get
+        else:
+            crossings_ms, alerted_channels = [[] for _ in PREAVVISO_CHANNELS], []
+        crossings_ms = [list(c) for c in crossings_ms]
+        alerted_channels = list(alerted_channels)
+
+        out_rows = []
+        last_event_ms = 0
+        run_id = None
+
+        for row in pdf.itertuples():
+            t_ms = int(row.event_time.timestamp() * 1000)
+            last_event_ms = max(last_event_ms, t_ms)
+            run_id = getattr(row, "run_id", None) or run_id
+            cutoff_ms = t_ms - int(PREAVVISO_WINDOW_S * 1000)
+
+            for i, channel in enumerate(PREAVVISO_CHANNELS):
+                value = getattr(row, channel)
+                crossings_ms[i] = [t for t in crossings_ms[i] if t >= cutoff_ms]
+                if _crosses(channel, value):
+                    crossings_ms[i].append(t_ms)
+                n = len(crossings_ms[i])
+                if n >= PREAVVISO_MIN_CROSSINGS and channel not in alerted_channels:
+                    out_rows.append({
+                        "type": "previsione", "robot_id": robot_id, "run_id": run_id,
+                        "channel": channel, "current_value": float(value) if value is not None else None,
+                        "critical_threshold": float(hard_by_channel[channel]),
+                        "lead_time_s": PREAVVISO_LEAD_TIME_ESTIMATE_S, "n_crossings": int(n),
+                    })
+                    alerted_channels.append(channel)
+                elif n == 0 and channel in alerted_channels:
+                    # tornato stabilmente nominale (nessuna raffica nella
+                    # finestra): si permette una nuova previsione in futuro
+                    # se le raffiche riprendono.
+                    alerted_channels.remove(channel)
+
+        state.update((crossings_ms, alerted_channels))
+        state.setTimeoutTimestamp(last_event_ms + int(PREAVVISO_STATE_TIMEOUT_S * 1000))
+
+        if out_rows:
+            return iter([pd.DataFrame(out_rows)])
+        return iter([pd.DataFrame(columns=[f.name for f in PREAVVISO_OUTPUT_SCHEMA.fields])])
+
+    return _fn
 
 
 def load_graph(config_dir):
@@ -224,9 +368,9 @@ def make_dist_to_goal_udf(node_pos_bc, dist_table_bc, edge_lookup_bc):
     (~0.2 m/s) richiede ~50s: se si agganciasse (x, y) al solo nodo piu'
     vicino (versione precedente), dist_to_goal resterebbe piatto per circa
     meta' di quel tempo -- piu' della finestra di 30s del rilevatore di
-    livelock (Passo 7) -- facendo scattare falsi positivi su robot che si
-    stanno muovendo normalmente. Verificato con dati reali: vedi
-    docs/passi/07-detection-streaming.md, sezione fix del Passo 11."""
+    livelock -- facendo scattare falsi positivi su robot che si stanno
+    muovendo normalmente. Verificato con dati reali: vedi
+    docs/passi/07-detection-streaming.md."""
     def _dist(x, y, current_edge, goal_node):
         if goal_node is None or x is None or y is None:
             return None
@@ -368,14 +512,14 @@ def main():
         if batch_df.rdd.isEmpty():
             return
         fleet_state = batch_df.select(
-            "ts", "robot_id", "x", "y", "theta", "v_lin", "v_ang",
+            "ts", "robot_id", "run_id", "x", "y", "theta", "v_lin", "v_ang",
             "battery_pct", "motor_current", "motor_temp", "min_obstacle_dist",
             "task_state", "current_edge", "goal_node", "health_anomaly",
         )
         to_kafka(fleet_state, "fleet_state", key_col="robot_id")
 
         anomalies = batch_df.filter("health_anomaly").select(
-            F.lit("salute").alias("type"), "ts", "robot_id",
+            F.lit("salute").alias("type"), "ts", "robot_id", "run_id",
             "threshold_reasons", "if_anomaly",
             "motor_temp", "motor_current", "battery_pct",
         )
@@ -393,7 +537,7 @@ def main():
     # -------------------------------------------------------------- livelock
     livelock = (
         telemetry
-        .select("robot_id", "event_time", "dist_to_goal", "task_state")
+        .select("robot_id", "run_id", "event_time", "dist_to_goal", "task_state", "goal_node")
         .withWatermark("event_time", "30 seconds")
         .groupBy("robot_id")
         .applyInPandasWithState(
@@ -424,13 +568,13 @@ def main():
         telemetry.filter(F.col("task_state") == "blocked")
         .withWatermark("event_time", "20 seconds")
         .groupBy(F.window("event_time", DEADLOCK_WINDOW, DEADLOCK_SLIDE), "current_edge")
-        .agg(F.collect_set("robot_id").alias("robots"))
+        .agg(F.collect_set("robot_id").alias("robots"), F.first("run_id", ignorenulls=True).alias("run_id"))
     )
     deadlock_candidates = deadlock_windowed.filter(F.size("robots") >= 2).select(
         F.lit("deadlock").alias("type"),
         F.col("window.start").alias("window_start"),
         F.col("window.end").alias("window_end"),
-        "current_edge", "robots",
+        "current_edge", "robots", "run_id",
     )
     deadlock_query = (
         deadlock_candidates.writeStream
@@ -441,7 +585,31 @@ def main():
         .start()
     )
 
-    _ = (health_query, livelock_query, deadlock_query)
+    # ------------------------------------------------------------ previsione
+    previsione_state_func = make_previsione_state_func(thresholds)
+    previsione = (
+        telemetry
+        .select("robot_id", "run_id", "event_time", "motor_temp", "motor_current", "battery_pct")
+        .withWatermark("event_time", "30 seconds")
+        .groupBy("robot_id")
+        .applyInPandasWithState(
+            previsione_state_func,
+            outputStructType=PREAVVISO_OUTPUT_SCHEMA,
+            stateStructType=PREAVVISO_STATE_SCHEMA,
+            outputMode="append",
+            timeoutConf=GroupStateTimeout.EventTimeTimeout,
+        )
+    )
+    previsione_query = (
+        previsione.writeStream
+        .foreachBatch(write_anomaly_batch)
+        .outputMode("append")
+        .option("checkpointLocation", f"{CHECKPOINT_DIR}/previsione")
+        .trigger(processingTime="5 seconds")
+        .start()
+    )
+
+    _ = (health_query, livelock_query, deadlock_query, previsione_query)
     spark.streams.awaitAnyTermination()
 
 

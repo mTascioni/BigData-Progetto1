@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Servizio HTTP per il layer TAG (Passo 10): tiene viva una SparkSession
-e una viste temporanee sulle 4 tabelle Parquet (telemetry, anomalies,
+"""Servizio HTTP per il layer TAG: tiene viva una SparkSession e una viste
+temporanee sulle 4 tabelle Parquet (telemetry, anomalies,
 injected_faults, predictions), eseguendo via Spark SQL le query che il
 backend Node manda dopo averle ottenute dal LLM.
 
@@ -41,7 +41,14 @@ def refresh_views():
         if not os.path.isdir(path) or not os.listdir(path):
             continue
         try:
-            spark.read.parquet(path).createOrReplaceTempView(name)
+            # mergeSchema: file Parquet scritti prima dell'introduzione di un
+            # campo nuovo (es. run_id) non hanno quella colonna -- senza
+            # questa opzione Spark inferisce lo schema da un solo file
+            # e una query che referenzia il campo nuovo fallisce con
+            # UNRESOLVED_COLUMN non appena esiste anche un solo file vecchio
+            # nella cartella. Con mergeSchema le righe piu' vecchie leggono
+            # semplicemente null per quel campo.
+            spark.read.option("mergeSchema", "true").parquet(path).createOrReplaceTempView(name)
         except Exception as exc:
             print(f"  attenzione: impossibile caricare {name} ({exc})")
 

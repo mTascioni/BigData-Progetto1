@@ -19,8 +19,8 @@ let transform = null; // (x, y) -> [px, py]
 const robots = new Map(); // robot_id -> ultimo stato ricevuto (con _receivedAt)
 
 // Robot reali (flotta ROS sempre accesa, config/experiment.json: R1, R2, R3)
-// vs robot-token del generatore sintetico (Passo 12, run on-demand, anche
-// su una topologia diversa da quella reale). Stessa regex del backend
+// vs robot-token del generatore sintetico (run on-demand, spesso su una
+// topologia diversa da quella reale). Stessa regex del backend
 // (fleetStateStore.js) -- qui serve solo per decidere cosa disegnare dove.
 const REAL_ROBOT_ID_RE = /^R\d+$/;
 
@@ -34,6 +34,36 @@ let activePreset = "medium";
 const deadlockEdges = new Map(); // edge_id -> expiresAt (ms epoch)
 const robotAlerts = new Map(); // robot_id -> { type: 'deadlock'|'livelock', expiresAt }
 const recentEvents = []; // log per il pannello "Eventi recenti", piu' recente in testa
+
+// Previsioni "live" (type="previsione" dallo streaming, vedi detection_job.py)
+// mostrate subito in "Robot a rischio", non solo le previsioni offline
+// (predictive/forecast_failures.py, batch, rilette ogni 5s da /api/predictions).
+// Chiave (robot_id, channel): una nuova previsione live sullo stesso canale
+// sovrascrive la precedente. TTL perche' il lead_time_s live e' una stima
+// fissa (la finestra di osservazione, non una regressione che si aggiorna da
+// sola): senza scadenza resterebbe visibile anche a robot riparato o trend rientrato.
+const livePredictions = new Map(); // "robot_id:channel" -> { robot_id, channel, current_value, critical_threshold, lead_time_s, _receivedAt }
+const PREDICTION_LIVE_TTL_MS = 120000;
+
+// Una perturbazione non genera un evento dedicato (e' rumore, non
+// un'anomalia): la teniamo qui lato client, dal momento in cui il form la
+// invia fino alla scadenza della sua durata, cosi' l'operatore vede quale
+// robot la sta subendo in questo momento senza dover controllare i log.
+const activePerturbations = new Map(); // robot_id -> { channel, expiresAt }
+
+function markPerturbationActive(robotId, channel, durationS) {
+  activePerturbations.set(robotId, { channel, expiresAt: Date.now() + durationS * 1000 });
+}
+
+// Pannello "Streaming live": buffer client-side per topic, mai scritto su
+// disco -- solo l'ultimo MAX_RAW_LOG_LINES messaggi campionati (il backend
+// campiona gia' a monte, vedi rawStream.js) restano in memoria, scartati al
+// refresh della pagina.
+const RAW_STREAM_TOPICS = ["telemetry", "anomalies", "injected_faults", "fleet_state"];
+const MAX_RAW_LOG_LINES = 50;
+const rawStreamBuffers = Object.fromEntries(RAW_STREAM_TOPICS.map((t) => [t, []]));
+let rawStreamActiveTopic = "telemetry";
+let rawStreamPaused = false;
 
 function buildTransform(nodes) {
   const xs = nodes.map((n) => n.x);
@@ -129,7 +159,7 @@ function drawRobots(now) {
 
     if (!isReal) {
       // anello tratteggiato: distingue a colpo d'occhio un robot-token del
-      // generatore sintetico (Passo 12) da un robot reale ROS/Gazebo.
+      // generatore sintetico da un robot reale ROS/Gazebo.
       ctx.beginPath();
       ctx.arc(x, y, 9, 0, Math.PI * 2);
       ctx.strokeStyle = "#9aa4b2";
@@ -188,9 +218,8 @@ function drawRobots(now) {
 // confine della zona di clip qui sotto. Tutto cio' che si disegna oltre il
 // punto esatto del nodo -- l'etichetta di testo (offset +8/-8px), l'anello
 // di anomalia (raggio 13px), quello di deadlock/livelock (17px) -- finiva
-// tagliato via dal clip per i nodi perimetrali (bug reale segnalato
-// dall'utente, "la griglia viene visualizzata tagliata": non un problema di
-// CSS/layout, il canvas disegnava correttamente ma il clip la troncava).
+// tagliato via dal clip per i nodi perimetrali (il canvas disegnava
+// correttamente, era il clip a troncare).
 // Fix: la zona di clip resta piu' larga di CLIP_MARGIN px per lato rispetto
 // a dove arrivano i nodi, cosi' c'e' spazio per etichette/anelli senza
 // perdere lo scopo originale del clip (nascondere robot fuori griglia).
@@ -241,10 +270,15 @@ function updateMapBadge() {
   const all = [...robots.values()];
   const nReal = all.filter((r) => REAL_ROBOT_ID_RE.test(r.robot_id)).length;
   const nSynthetic = all.length - nReal;
+  // run_id isola i dati di run diversi nello storico -- mostrato qui solo
+  // come promemoria di debug (a quale run appartengono i robot visti ora),
+  // preso dal primo robot con un run_id valorizzato.
+  const runId = all.find((r) => r.run_id)?.run_id;
+  const runSuffix = runId ? ` · run ${runId}` : "";
   if (activePreset === "medium") {
-    badge.textContent = `Vista: grafo reale (medium) — ${nReal} robot reali, ${nSynthetic} sintetici`;
+    badge.textContent = `Vista: grafo reale (medium) — ${nReal} robot reali, ${nSynthetic} sintetici${runSuffix}`;
   } else {
-    badge.textContent = `Vista: preset "${activePreset}" (generatore) — robot reali nascosti (grafo diverso), ${nSynthetic} sintetici`;
+    badge.textContent = `Vista: preset "${activePreset}" (generatore) — robot reali nascosti (grafo diverso), ${nSynthetic} sintetici${runSuffix}`;
   }
 }
 
@@ -274,6 +308,8 @@ function connectWebSocket() {
       robots.delete(msg.robot_id);
     } else if (msg.type === "anomaly") {
       handleAnomalyEvent(msg.anomaly, receivedAt);
+    } else if (msg.type === "raw") {
+      handleRawMessage(msg.topic, msg.value, msg.ts);
     }
   });
 }
@@ -287,6 +323,16 @@ function handleAnomalyEvent(anomaly, now) {
     }
   } else if (anomaly.type === "livelock") {
     robotAlerts.set(anomaly.robot_id, { type: "livelock", expiresAt });
+  } else if (anomaly.type === "previsione") {
+    livePredictions.set(`${anomaly.robot_id}:${anomaly.channel}`, {
+      robot_id: anomaly.robot_id,
+      channel: anomaly.channel,
+      current_value: anomaly.current_value,
+      critical_threshold: anomaly.critical_threshold,
+      lead_time_s: anomaly.lead_time_s,
+      _receivedAt: Date.now(),
+    });
+    refreshPredictions();
   }
 
   recentEvents.unshift({ ...anomaly, _seenAt: Date.now() });
@@ -301,13 +347,49 @@ function renderEvents() {
   list.innerHTML = recentEvents
     .map((ev) => {
       const time = new Date(ev._seenAt).toLocaleTimeString("it-IT");
-      const label =
-        ev.type === "deadlock"
-          ? `deadlock su ${ev.current_edge} (${(ev.robots || []).join(", ")})`
-          : `livelock su ${ev.robot_id}`;
+      let label;
+      if (ev.type === "deadlock") {
+        label = `deadlock su ${ev.current_edge} (${(ev.robots || []).join(", ")})`;
+      } else if (ev.type === "previsione") {
+        label = `previsione di guasto su ${ev.robot_id}: ${ev.channel} (lead time ~${Math.round(ev.lead_time_s)}s)`;
+      } else {
+        label = `livelock su ${ev.robot_id}`;
+      }
       return `<li class="event-${ev.type}"><span class="event-time">${time}</span> ${label}</li>`;
     })
     .join("");
+}
+
+function handleRawMessage(topic, value, ts) {
+  const buf = rawStreamBuffers[topic];
+  if (!buf) return;
+  buf.unshift({ value, ts });
+  if (buf.length > MAX_RAW_LOG_LINES) buf.length = MAX_RAW_LOG_LINES;
+  if (topic === rawStreamActiveTopic && !rawStreamPaused) renderRawStream();
+}
+
+function renderRawStream() {
+  const log = document.getElementById("raw-stream-log");
+  const buf = rawStreamBuffers[rawStreamActiveTopic] || [];
+  log.textContent = buf
+    .map((e) => `[${new Date(e.ts).toLocaleTimeString("it-IT")}] ${JSON.stringify(e.value)}`)
+    .join("\n");
+}
+
+function setupRawStreamPanel() {
+  document.querySelectorAll("#raw-stream-tabs .tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#raw-stream-tabs .tab-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      rawStreamActiveTopic = btn.dataset.topic;
+      renderRawStream();
+    });
+  });
+  document.getElementById("raw-stream-pause").addEventListener("click", (event) => {
+    rawStreamPaused = !rawStreamPaused;
+    event.target.textContent = rawStreamPaused ? "Riprendi" : "Pausa";
+    if (!rawStreamPaused) renderRawStream();
+  });
 }
 
 function formatLeadTime(seconds) {
@@ -320,27 +402,45 @@ function formatLeadTime(seconds) {
 async function refreshPredictions() {
   const tbody = document.querySelector("#predictions-table tbody");
   const empty = document.getElementById("predictions-empty");
+
+  const now = Date.now();
+  for (const [key, live] of livePredictions) {
+    if (now - live._receivedAt > PREDICTION_LIVE_TTL_MS) livePredictions.delete(key);
+  }
+
+  let offlineRows = [];
   try {
     const res = await fetch("/api/predictions");
     const data = await res.json();
-    const rows = data.rows || [];
-    tbody.innerHTML = "";
-    empty.hidden = rows.length > 0;
-    for (const row of rows) {
-      const tr = document.createElement("tr");
-      if (row.lead_time_s < 300) tr.className = "risk-high";
-      else if (row.lead_time_s < 900) tr.className = "risk-mid";
-      tr.innerHTML = `
-        <td>${row.robot_id}</td>
-        <td>${row.channel}</td>
-        <td>${Number(row.current_value).toFixed(1)}</td>
-        <td>${Number(row.critical_threshold).toFixed(1)}</td>
-        <td>${formatLeadTime(row.lead_time_s)}</td>`;
-      tbody.appendChild(tr);
-    }
+    offlineRows = data.rows || [];
   } catch {
-    empty.hidden = false;
-    empty.textContent = "Previsioni non disponibili al momento.";
+    // le previsioni offline potrebbero non essere disponibili (es. nessun
+    // run di predictive/forecast_failures.py ancora eseguito): quelle live
+    // restano comunque valide, non si azzera tutto.
+  }
+
+  // Le previsioni live (streaming, appena rilevate) hanno sempre la
+  // precedenza su quelle offline per la stessa coppia (robot_id, channel):
+  // sono piu' fresche del batch, che gira on-demand ogni tot minuti.
+  const merged = new Map();
+  for (const row of offlineRows) merged.set(`${row.robot_id}:${row.channel}`, row);
+  for (const [key, live] of livePredictions) merged.set(key, live);
+
+  const rows = Array.from(merged.values()).sort((a, b) => a.lead_time_s - b.lead_time_s);
+  tbody.innerHTML = "";
+  empty.hidden = rows.length > 0;
+  empty.textContent = "Nessun robot con un trend a rischio al momento.";
+  for (const row of rows) {
+    const tr = document.createElement("tr");
+    if (row.lead_time_s < 300) tr.className = "risk-high";
+    else if (row.lead_time_s < 900) tr.className = "risk-mid";
+    tr.innerHTML = `
+      <td>${row.robot_id}</td>
+      <td>${row.channel}</td>
+      <td>${Number(row.current_value).toFixed(1)}</td>
+      <td>${Number(row.critical_threshold).toFixed(1)}</td>
+      <td>${formatLeadTime(row.lead_time_s)}</td>`;
+    tbody.appendChild(tr);
   }
 }
 
@@ -407,11 +507,17 @@ function renderFleetTable() {
   const rows = [...robots.values()].sort((a, b) => a.robot_id.localeCompare(b.robot_id));
   const FLEET_TABLE_ROW_LIMIT = 200; // migliaia di robot-token del generatore intaserebbero il DOM
   const shown = rows.slice(0, FLEET_TABLE_ROW_LIMIT);
+  const now = Date.now();
   tbody.innerHTML = shown
-    .map(
-      (r) => `
+    .map((r) => {
+      const perturbation = activePerturbations.get(r.robot_id);
+      const perturbing = perturbation && perturbation.expiresAt > now;
+      const robotLabel = perturbing
+        ? `${r.robot_id} <span class="perturbation-badge" title="Perturbazione attiva su ${perturbation.channel}">rumore: ${perturbation.channel}</span>`
+        : r.robot_id;
+      return `
     <tr>
-      <td>${r.robot_id}</td>
+      <td>${robotLabel}</td>
       <td>${r.task_state}</td>
       <td>${Number(r.x).toFixed(2)}</td>
       <td>${Number(r.y).toFixed(2)}</td>
@@ -421,16 +527,16 @@ function renderFleetTable() {
       <td>${r.current_edge ?? "-"}</td>
       <td>${r.goal_node ?? "-"}</td>
       <td class="${r.health_anomaly ? "anomaly-yes" : ""}">${r.health_anomaly ? "si" : "no"}</td>
-    </tr>`
-    )
+    </tr>`;
+    })
     .join("");
   if (rows.length > shown.length) {
     tbody.innerHTML += `<tr><td colspan="10" class="hint">... e altri ${rows.length - shown.length} robot (troncato)</td></tr>`;
   }
 }
 
-// Passo 14: pannello di controllo della flotta reale (ROS/Gazebo). repairNode
-// e reserveNode arrivano da /api/fleet-control/config (letti da
+// Pannello di controllo della flotta reale (ROS/Gazebo). repairNode e
+// reserveNode arrivano da /api/fleet-control/config (letti da
 // config/experiment.json lato backend), non sono hardcoded qui.
 let realFleetConfig = { repair_node: null, reserve_node: null, reserve_robot_ids: [] };
 
@@ -444,8 +550,14 @@ async function loadRealFleetConfig() {
 }
 
 function realRobotStatus(robot) {
-  if (robot.goal_node && robot.goal_node === realFleetConfig.repair_node) return "in riparazione";
+  if (robot.goal_node && robot.goal_node === realFleetConfig.repair_node) return "in riparazione (preventiva)";
   if (robot.goal_node && robot.goal_node === realFleetConfig.reserve_node) return "di riserva (rientrato)";
+  // Un'anomalia di salute su soglia dura ferma il robot dov'e' (non lo manda
+  // in automatico a repair_node, vedi fleetStateStore.js::onPersistentFailure)
+  // -- se health_anomaly e' vero e il robot non e' gia' diretto verso
+  // repair_node/reserve_node (i due casi sopra, riservati alla previsione
+  // preventiva), e' un guasto persistente reale in attesa dell'operatore.
+  if (robot.health_anomaly) return "in avaria";
   // una riserva mai ancora dispacciata non ha mai ricevuto un goal (nessun
   // task all'avvio): goal_node resta vuoto, non c'e' modo di riconoscerla
   // dal solo goal_node come le altre due condizioni sopra.
@@ -462,21 +574,26 @@ function renderRealFleetPanel() {
   tbody.innerHTML = realRobots
     .map((r) => {
       const status = realRobotStatus(r);
-      const returnBtn =
-        status === "in riparazione"
-          ? `<button type="button" class="real-return-btn" data-robot="${r.robot_id}">Rimetti in servizio</button>`
-          : "";
-      return `<tr><td>${r.robot_id}</td><td>${status}</td><td>${r.goal_node ?? "-"}</td><td>${returnBtn}</td></tr>`;
+      let actionBtn = "";
+      if (status === "in riparazione (preventiva)") {
+        actionBtn = `<button type="button" class="real-return-btn" data-robot="${r.robot_id}">Rimetti in servizio</button>`;
+      } else if (status === "in avaria") {
+        actionBtn = `<button type="button" class="real-decommission-btn" data-robot="${r.robot_id}">Decommissiona</button>`;
+      }
+      const rowClass = status === "in avaria" ? ' class="robot-in-avaria"' : "";
+      return `<tr${rowClass}><td>${r.robot_id}</td><td>${status}</td><td>${r.goal_node ?? "-"}</td><td>${actionBtn}</td></tr>`;
     })
     .join("");
 
-  const select = document.getElementById("real-fault-robot");
   const currentIds = new Set(realRobots.map((r) => r.robot_id));
-  const selectedIds = new Set([...select.options].map((o) => o.value));
-  if (currentIds.size !== selectedIds.size || [...currentIds].some((id) => !selectedIds.has(id))) {
-    const previous = select.value;
-    select.innerHTML = realRobots.map((r) => `<option value="${r.robot_id}">${r.robot_id}</option>`).join("");
-    if (currentIds.has(previous)) select.value = previous;
+  for (const selectId of ["real-fault-robot", "real-perturbation-robot"]) {
+    const select = document.getElementById(selectId);
+    const selectedIds = new Set([...select.options].map((o) => o.value));
+    if (currentIds.size !== selectedIds.size || [...currentIds].some((id) => !selectedIds.has(id))) {
+      const previous = select.value;
+      select.innerHTML = realRobots.map((r) => `<option value="${r.robot_id}">${r.robot_id}</option>`).join("");
+      if (currentIds.has(previous)) select.value = previous;
+    }
   }
 
   tbody.querySelectorAll(".real-return-btn").forEach((btn) => {
@@ -495,11 +612,33 @@ function renderRealFleetPanel() {
       }
     });
   });
+
+  // Un robot "in avaria" (guasto persistente, gia' fermato dov'era dal
+  // backend) puo' essere tolto dalla flotta dall'operatore -- sparisce da
+  // mappa/tabelle non appena il backend conferma (stesso meccanismo
+  // websocket "remove" gia' usato per i robot-token del generatore).
+  tbody.querySelectorAll(".real-decommission-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const robotId = btn.dataset.robot;
+      const msgEl = document.getElementById("real-fleet-status-msg");
+      if (!confirm(`Rimuovere ${robotId} dalla flotta? Non tornera' visibile finche' non riavvii la simulazione.`)) return;
+      try {
+        await fetch("/api/fleet-control/robot/decommission", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ robot_id: robotId }),
+        });
+        msgEl.textContent = `${robotId} rimosso dalla flotta.`;
+      } catch (err) {
+        msgEl.textContent = `Errore: ${err.message}`;
+      }
+    });
+  });
 }
 
-// Passo 14, estensione 2026-07-21: la simulazione ROS/Gazebo non parte piu'
-// in automatico -- la dashboard la avvia/ferma scegliendo la scala, stesso
-// pattern start/stop del pannello del generatore sintetico piu' sotto.
+// La simulazione ROS/Gazebo non parte in automatico -- la dashboard la
+// avvia/ferma scegliendo la scala, stesso pattern start/stop del pannello
+// del generatore sintetico piu' sotto.
 async function refreshSimStatus() {
   const startBtn = document.getElementById("sim-start-btn");
   const stopBtn = document.getElementById("sim-stop-btn");
@@ -603,6 +742,70 @@ function setupRealFaultForm() {
   });
 }
 
+function setupRealPerturbationForm() {
+  document.getElementById("real-perturbation-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const robotId = document.getElementById("real-perturbation-robot").value;
+    const channel = document.getElementById("real-perturbation-channel").value;
+    const durationS = Number(document.getElementById("real-perturbation-duration").value);
+    const msgEl = document.getElementById("real-fleet-status-msg");
+    if (!robotId) {
+      msgEl.textContent = "Nessun robot reale disponibile al momento.";
+      return;
+    }
+    try {
+      const res = await fetch("/api/fleet-control/fault", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          robot_id: robotId,
+          fault_type: "rumore_sensore",
+          duration_s: durationS,
+          params: { channel },
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      markPerturbationActive(robotId, channel, durationS);
+      msgEl.textContent = `Perturbazione su ${channel} iniettata su ${robotId} (durata ${durationS}s) -- rumore, non un guasto.`;
+    } catch (err) {
+      msgEl.textContent = `Errore: ${err.message}`;
+    }
+  });
+}
+
+// Oltre questo numero di robot il menu a tendina diventa poco pratico
+// (migliaia di <option>, sweep di scala): oltre la soglia si resta su
+// "casuale", che e' comunque la scelta giusta per quei test.
+const FAULT_ROBOT_SELECT_LIMIT = 500;
+
+function faultRobotOptionsHtml() {
+  const numRobots = Number(document.getElementById("gen-num-robots").value) || 0;
+  const prefix = "SIM"; // stesso default di robot_id_prefix lato generatore
+  let options = `<option value="random">casuale</option>`;
+  if (numRobots > 0 && numRobots <= FAULT_ROBOT_SELECT_LIMIT) {
+    for (let i = 0; i < numRobots; i++) {
+      const id = `${prefix}${String(i).padStart(5, "0")}`;
+      options += `<option value="${id}">${id}</option>`;
+    }
+  } else if (numRobots > FAULT_ROBOT_SELECT_LIMIT) {
+    options += `<option value="random" disabled>(${numRobots} robot: troppi per elencarli, usa "casuale")</option>`;
+  }
+  return options;
+}
+
+// Il numero di robot puo' cambiare dopo che una riga guasto e' gia' stata
+// aggiunta: si rigenerano le opzioni di tutte le righe esistenti, provando a
+// mantenere la selezione corrente se ancora valida.
+function refreshFaultRobotOptions() {
+  const html = faultRobotOptionsHtml();
+  document.querySelectorAll("#gen-faults-list .fault-robot").forEach((select) => {
+    const previous = select.value;
+    select.innerHTML = html;
+    if ([...select.options].some((o) => o.value === previous)) select.value = previous;
+  });
+}
+
 function addFaultRow() {
   const container = document.getElementById("gen-faults-list");
   const row = document.createElement("div");
@@ -613,8 +816,10 @@ function addFaultRow() {
       <option value="spike_corrente">spike_corrente (motor_current)</option>
       <option value="batteria_collasso">batteria_collasso (battery_pct)</option>
       <option value="sensore_bloccato">sensore_bloccato (freeze)</option>
+      <option value="preavviso_intermittente">preavviso_intermittente (raffiche, motor_current)</option>
+      <option value="rumore_sensore">rumore_sensore (perturbazione, non un guasto)</option>
     </select>
-    <input class="fault-robot" type="text" placeholder="robot (vuoto = a caso)" />
+    <select class="fault-robot">${faultRobotOptionsHtml()}</select>
     <label>inizio(s) <input class="fault-start" type="number" value="10" min="0" /></label>
     <label>durata(s) <input class="fault-duration" type="number" value="30" min="1" /></label>
     <button type="button" class="fault-remove">&times;</button>`;
@@ -625,10 +830,32 @@ function addFaultRow() {
 function collectFaults() {
   return [...document.querySelectorAll("#gen-faults-list .fault-row")].map((row) => ({
     fault_type: row.querySelector(".fault-type").value,
-    robot_id: row.querySelector(".fault-robot").value.trim() || "random",
+    robot_id: row.querySelector(".fault-robot").value || "random",
     start_time_s: Number(row.querySelector(".fault-start").value),
     duration_s: Number(row.querySelector(".fault-duration").value),
   }));
+}
+
+// Le due select di iniezione live (guasto/perturbazione) elencano i robot
+// del run ATTIVO (dal suo config, non dal campo "Numero robot", che nel
+// frattempo puo' essere gia' stato cambiato in vista del run successivo).
+function populateLiveInjectRobotOptions(config) {
+  const prefix = config.robot_id_prefix || "SIM";
+  const numRobots = Number(config.num_robots) || 0;
+  const limited = Math.min(numRobots, FAULT_ROBOT_SELECT_LIMIT);
+  const options = Array.from({ length: limited }, (_, i) => `${prefix}${String(i).padStart(5, "0")}`)
+    .map((id) => `<option value="${id}">${id}</option>`)
+    .join("");
+  for (const selectId of ["gen-live-fault-robot", "gen-live-perturbation-robot"]) {
+    const select = document.getElementById(selectId);
+    if (select.innerHTML !== options) select.innerHTML = options;
+  }
+}
+
+function setGenLiveInjectEnabled(enabled) {
+  for (const id of ["gen-live-fault-robot", "gen-live-fault-btn", "gen-live-perturbation-robot", "gen-live-perturbation-btn"]) {
+    document.getElementById(id).disabled = !enabled;
+  }
 }
 
 async function refreshGenStatus() {
@@ -640,6 +867,8 @@ async function refreshGenStatus() {
     const s = await res.json();
     startBtn.disabled = !!s.running;
     stopBtn.disabled = !s.running;
+    setGenLiveInjectEnabled(!!s.running);
+    if (s.running && s.config) populateLiveInjectRobotOptions(s.config);
     // La mappa segue il preset del run attivo; a run finito/fermo torna al
     // grafo reale (medium), che e' la vista di default quando non si sta
     // facendo un esperimento di carico.
@@ -662,6 +891,7 @@ async function refreshGenStatus() {
 
 function setupGeneratorForm() {
   document.getElementById("gen-add-fault").addEventListener("click", addFaultRow);
+  document.getElementById("gen-num-robots").addEventListener("input", refreshFaultRobotOptions);
 
   const form = document.getElementById("generator-form");
   const statusEl = document.getElementById("gen-status");
@@ -701,20 +931,84 @@ function setupGeneratorForm() {
   });
 }
 
-// Estensione "risultati live" (2026-07-21): gli script eval/*.py non
-// scrivono piu' PNG (restano CSV/JSON, letti a valle per il PDF se serve).
-// La dashboard avvia il run on-demand (POST /api/eval/run) e ne segue
+function setupGenLiveInjectionForms() {
+  const msgEl = document.getElementById("gen-live-status-msg");
+
+  document.getElementById("gen-live-fault-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const robotId = document.getElementById("gen-live-fault-robot").value;
+    const faultType = document.getElementById("gen-live-fault-type").value;
+    const durationS = Number(document.getElementById("gen-live-fault-duration").value);
+    if (!robotId) {
+      msgEl.textContent = "Nessun robot disponibile (il run e' in corso?).";
+      return;
+    }
+    try {
+      const res = await fetch("/api/generator/fault", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ robot_id: robotId, fault_type: faultType, duration_s: durationS }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      msgEl.textContent = `Guasto '${faultType}' iniettato su ${robotId} (durata ${durationS}s).`;
+    } catch (err) {
+      msgEl.textContent = `Errore: ${err.message}`;
+    }
+  });
+
+  document.getElementById("gen-live-perturbation-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const robotId = document.getElementById("gen-live-perturbation-robot").value;
+    const channel = document.getElementById("gen-live-perturbation-channel").value;
+    const durationS = Number(document.getElementById("gen-live-perturbation-duration").value);
+    if (!robotId) {
+      msgEl.textContent = "Nessun robot disponibile (il run e' in corso?).";
+      return;
+    }
+    try {
+      const res = await fetch("/api/generator/fault", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          robot_id: robotId,
+          fault_type: "rumore_sensore",
+          duration_s: durationS,
+          params: { channel },
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      markPerturbationActive(robotId, channel, durationS);
+      msgEl.textContent = `Perturbazione su ${channel} iniettata su ${robotId} (durata ${durationS}s) -- rumore, non un guasto.`;
+    } catch (err) {
+      msgEl.textContent = `Errore: ${err.message}`;
+    }
+  });
+}
+
+// Gli script eval/*.py non scrivono PNG (restano CSV/JSON, letti a valle
+// per il PDF se serve). La dashboard avvia il run on-demand
+// (POST /api/eval/run) e ne segue
 // l'avanzamento via polling di GET /api/eval/status: eval_service.py
 // pubblica il risultato di ogni sotto-esperimento appena e' pronto, cosi'
 // qui si vedono comparire uno alla volta, non solo a run completato.
 const EVAL_CSV_FILES = {
-  effectiveness: ["detection_robots.csv", "detection_summary.csv", "prediction_accuracy.csv", "tag_accuracy.csv"],
-  efficiency: ["throughput_sweep.csv", "latency_onset_alert.csv"],
+  effectiveness: [
+    "detection_robots.csv", "detection_summary.csv", "prediction_accuracy.csv",
+    "live_prediction_robots.csv", "tag_accuracy.csv",
+  ],
+  efficiency: [
+    "throughput_sweep.csv", "latency_onset_alert.csv", "scalability.csv", "selfhealing_latency.csv",
+  ],
 };
 
 const EVAL_STAGE_LABELS = {
-  effectiveness: { detection: "detection", prediction: "previsione", tag: "TAG" },
-  efficiency: { throughput: "throughput sweep", latency: "latenza onset→alert" },
+  effectiveness: { detection: "detection", prediction: "previsione offline", live_prediction: "previsione live", tag: "TAG" },
+  efficiency: {
+    throughput: "throughput sweep", latency: "latenza onset→alert",
+    scalability: "scalabilità", selfhealing: "reattività (flotta reale)",
+  },
 };
 
 const evalPollTimers = { effectiveness: null, efficiency: null };
@@ -755,6 +1049,14 @@ function renderEffectivenessResults(results) {
       <div class="eval-stat"><span class="value">${p.scenarios ?? "-"}</span><span class="label">scenari testati</span></div>
     </div>`;
   }
+  if (results.live_prediction) {
+    const lp = results.live_prediction;
+    html += `<div class="eval-bars">
+      ${evalBar("precision", lp.precision, fmtPct(lp.precision))}
+      ${evalBar("recall", lp.recall, fmtPct(lp.recall))}
+    </div>
+    <p class="eval-meta">latenza media onset&rarr;previsione: ${fmtS(lp.avg_latency_s)}</p>`;
+  }
   if (results.tag) {
     const t = results.tag;
     html += `<div class="eval-bars">${evalBar("TAG accuracy", t.accuracy, `${t.correct ?? "-"}/${t.total ?? "-"}`)}</div>`;
@@ -777,6 +1079,22 @@ function renderEfficiencyResults(results) {
       <div class="eval-stat"><span class="value">${fmtS(la.avg_latency_s)}</span><span class="label">latenza media onset&rarr;alert</span></div>
       <div class="eval-stat"><span class="value">${la.successful ?? "-"}/${la.trials ?? "-"}</span><span class="label">prove riuscite</span></div>
     </div>`;
+  }
+  if (results.scalability) {
+    const sc = results.scalability;
+    html += `<div class="eval-stats">
+      <div class="eval-stat"><span class="value">${fmtPct(sc.precision_at_max_load)}</span><span class="label">precision a ${sc.max_robot_count ?? "-"} robot</span></div>
+      <div class="eval-stat"><span class="value">${fmtPct(sc.recall_at_max_load)}</span><span class="label">recall a ${sc.max_robot_count ?? "-"} robot</span></div>
+    </div>`;
+  }
+  if (results.selfhealing) {
+    const sh = results.selfhealing;
+    html += sh.skipped
+      ? `<p class="hint">Reattivita' saltata: ${sh.reason}.</p>`
+      : `<div class="eval-stats">
+          <div class="eval-stat"><span class="value">${fmtS(sh.avg_latency_s)}</span><span class="label">latenza media previsione&rarr;riparazione</span></div>
+          <div class="eval-stat"><span class="value">${sh.successful ?? "-"}/${sh.trials ?? "-"}</span><span class="label">prove riuscite</span></div>
+        </div>`;
   }
   return html || `<p class="hint">In attesa dei primi risultati...</p>`;
 }
@@ -879,7 +1197,10 @@ async function main() {
   connectWebSocket();
   setupTagForm();
   setupGeneratorForm();
+  setupGenLiveInjectionForms();
   setupRealFaultForm();
+  setupRealPerturbationForm();
+  setupRawStreamPanel();
   setupSimControls();
   setupSimTabs();
   setupEvalButtons();

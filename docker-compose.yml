@@ -23,7 +23,7 @@ services:
     container_name: shf-spark-master
     # avvia il master (comportamento originale dell'immagine) + query_service.py
     # e detection_job.py in background: cosi' partono da soli con `docker
-    # compose up`, senza `docker exec` manuali dopo il boot (Passo 13).
+    # compose up`, senza `docker exec` manuali dopo il boot.
     command: ["bash", "/opt/shf/streaming/start-master.sh"]
     environment:
       - SPARK_MODE=master
@@ -39,7 +39,7 @@ services:
     ports:
       - "8080:8080" # Spark master UI
       - "7077:7077"
-      - "5000:5000" # query_service (layer TAG, Passo 10)
+      - "5000:5000" # query_service (layer TAG)
 
   spark-worker:
     build: ./spark
@@ -96,9 +96,9 @@ services:
     ports:
       - "6080:6080" # noVNC (http://localhost:6080/vnc.html)
       - "11311:11311" # roscore
-      - "5001:5001" # generator_service (pannello di controllo dashboard, Passo 11 estensione)
-      - "5002:5002" # fleet_control_service (guasti live + missioni sulla flotta reale, Passo 14)
-      - "5003:5003" # eval_service (run di valutazione sperimentale on-demand, Passo 13 estensione)
+      - "5001:5001" # generator_service (pannello di controllo dashboard)
+      - "5002:5002" # fleet_control_service (guasti live + missioni sulla flotta reale)
+      - "5003:5003" # eval_service (run di valutazione sperimentale on-demand)
 
 volumes:
   spark-ivy-cache:

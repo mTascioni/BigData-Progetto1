@@ -2,10 +2,10 @@
 container `ros`, che ha gia' confluent-kafka/pandas/numpy/pyarrow e vede
 tutti gli altri servizi sulla rete Docker interna del progetto).
 
-Non e' il layer TAG di valutazione sperimentale del Passo 13 (quello vive
-in `eval/`, con piu' domande di riferimento e output per la tesina): questa
-suite verifica che il sistema funzioni correttamente, con soglie di
-correttezza (pass/fail), non produce numeri per un report.
+Non e' il layer di valutazione sperimentale (quello vive in `eval/`, con
+piu' domande di riferimento e output per la tesina): questa suite verifica
+che il sistema funzioni correttamente, con soglie di correttezza
+(pass/fail), non produce numeri per un report.
 """
 import json
 import os
@@ -135,19 +135,17 @@ def wait_generator_done(timeout_s):
 
 @pytest.fixture(scope="session", autouse=True)
 def _pause_real_simulation():
-    """La simulazione ROS/Gazebo reale (Passo 5) e' pesante in CPU e non
-    serve a questa suite (usa il generatore sintetico, Passo 12, per avere
-    robot controllati). Lasciarla accesa satura la CPU della macchina di
-    sviluppo insieme a Spark, causando batch Spark in ritardo e falsi
-    segnali nei test (osservato: detection_job con batch da 10s che ne
-    impiegava 15-19). Messa in pausa per tutta la sessione di test, rimessa
-    su alla fine -- ma solo se era davvero gia' in esecuzione prima (bug
-    reale trovato il 2026-07-21: `supervisorctl stop` ritorna comunque
-    successo anche se il programma era gia' fermo, quindi un controllo
-    basato solo su "il comando stop e' andato a buon fine" la riavviava
-    sempre in teardown, anche quando nessuno l'aveva mai avviata). Se
-    supervisorctl non e' raggiungibile (es. suite lanciata fuori dal
-    container ros) si prosegue comunque, solo piu' lenti."""
+    """La simulazione ROS/Gazebo reale e' pesante in CPU e non serve a
+    questa suite (usa il generatore sintetico per avere robot controllati).
+    Lasciarla accesa satura la CPU della macchina di sviluppo insieme a
+    Spark, causando batch Spark in ritardo e falsi segnali nei test.
+    Messa in pausa per tutta la sessione di test, rimessa su alla fine --
+    ma solo se era davvero gia' in esecuzione prima: `supervisorctl stop`
+    ritorna comunque successo anche se il programma era gia' fermo, quindi
+    un controllo basato solo su "il comando stop e' andato a buon fine" la
+    riavvierebbe sempre in teardown, anche quando nessuno l'aveva mai
+    avviata. Se supervisorctl non e' raggiungibile (es. suite lanciata
+    fuori dal container ros) si prosegue comunque, solo piu' lenti."""
     was_running = False
     try:
         status = subprocess.run(

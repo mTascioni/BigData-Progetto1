@@ -10,7 +10,10 @@
     { "id": "G", "x": 30, "y": 10,  "kind": "storage" },
     { "id": "H", "x": 20, "y": -10, "kind": "storage" },
     { "id": "I", "x": 10, "y": -10, "kind": "charging" },
-    { "id": "J", "x": 30, "y": -10, "kind": "storage" }
+    { "id": "J", "x": 30, "y": -10, "kind": "storage" },
+    { "id": "DEPOSITO", "x": -10, "y": 0, "kind": "repair" },
+    { "id": "RISERVA1", "x": -10, "y": 8, "kind": "reserve" },
+    { "id": "RISERVA2", "x": -10, "y": -8, "kind": "reserve" }
   ],
   "edges": [
     { "id": "A-B", "from": "A", "to": "B", "capacity": 2, "length": 10 },
@@ -23,12 +26,16 @@
     { "id": "H-J", "from": "H", "to": "J", "capacity": 2, "length": 10 },
     { "id": "G-J", "from": "G", "to": "J", "capacity": 2, "length": 20 },
     { "id": "C-F", "from": "C", "to": "F", "capacity": 1, "length": 10 },
-    { "id": "C-H", "from": "C", "to": "H", "capacity": 1, "length": 10 }
+    { "id": "C-H", "from": "C", "to": "H", "capacity": 1, "length": 10 },
+    { "id": "A-DEPOSITO", "from": "A", "to": "DEPOSITO", "capacity": 2, "length": 10 },
+    { "id": "A-RISERVA1", "from": "A", "to": "RISERVA1", "capacity": 2, "length": 12.8 },
+    { "id": "A-RISERVA2", "from": "A", "to": "RISERVA2", "capacity": 2, "length": 12.8 }
   ],
   "notes": [
     "Gli archi sono percorribili in entrambe le direzioni; 'from'/'to' fissano solo l'id, non un verso obbligato.",
     "capacity = numero massimo di robot che possono occupare contemporaneamente l'arco; capacity=1 = corsia singola (choke point).",
-    "L'anello C-F-G-J-H-C con i due choke point a corsia singola (C-F, C-H) è il punto d'innesco per gli scenari deadlock/livelock del Passo 5.",
-    "'current_edge' nella telemetria referenzia l'id di uno di questi archi; 'goal_node' referenzia l'id di uno di questi nodi."
+    "L'anello C-F-G-J-H-C con i due choke point a corsia singola (C-F, C-H) è il punto d'innesco per gli scenari deadlock/livelock.",
+    "'current_edge' nella telemetria referenzia l'id di uno di questi archi; 'goal_node' referenzia l'id di uno di questi nodi.",
+    "DEPOSITO/RISERVA1/RISERVA2: area di manutenzione fuori dai corridoi principali (x=-10, fuori dal rettangolo 0-30 del resto del magazzino), raggiungibile solo da A con un raccordo dedicato a testa cieca. Posizione propria, mai condivisa con lo start_node di robot in servizio (evita collisioni fisiche fra un robot in riparazione/riserva e uno attivo)."
   ]
 }

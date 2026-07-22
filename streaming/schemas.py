@@ -11,6 +11,12 @@ from pyspark.sql.types import (
 TELEMETRY_SCHEMA = StructType([
     StructField("ts", LongType()),
     StructField("robot_id", StringType()),
+    # Id della sessione/run corrente (generatore sintetico o avvio flotta
+    # reale) -- serve a non mescolare dati di run diversi quando robot_id
+    # viene riusato (es. SIM00000 esiste in ogni run del generatore).
+    # Nullable per compatibilita' con messaggi storici pre-esistenti privi
+    # del campo (from_json li lascia a null, non falliscono il parsing).
+    StructField("run_id", StringType()),
     StructField("x", DoubleType()),
     StructField("y", DoubleType()),
     StructField("theta", DoubleType()),
@@ -34,6 +40,7 @@ ANOMALIES_SCHEMA = StructType([
     StructField("type", StringType()),
     StructField("ts", LongType()),
     StructField("robot_id", StringType()),
+    StructField("run_id", StringType()),
     StructField("threshold_reasons", ArrayType(StringType())),
     StructField("if_anomaly", IntegerType()),
     StructField("motor_temp", DoubleType()),
@@ -51,9 +58,9 @@ ANOMALIES_SCHEMA = StructType([
 ])
 
 # params e' un oggetto JSON annidato (kafka_bridge.py lo scrive cosi'), non
-# una stringa. Schema superset di tutti e 6 i fault_type di
-# fault_signature_schema (Passo 2): i campi non pertinenti a un dato
-# fault_type restano null.
+# una stringa. Schema superset di tutti i fault_type di
+# fault_signature_schema: i campi non pertinenti a un dato fault_type
+# restano null.
 FAULT_PARAMS_SCHEMA = StructType([
     StructField("ramp_rate_c_per_s", DoubleType()),
     StructField("plateau_temp_c", DoubleType()),
@@ -65,11 +72,18 @@ FAULT_PARAMS_SCHEMA = StructType([
     StructField("trigger_pct", DoubleType()),
     StructField("frozen_channel", StringType()),
     StructField("freeze_duration_s", DoubleType()),
+    # preavviso_intermittente: raffiche saltuarie fuori soglia morbida, non
+    # un guasto pieno continuo -- segnale per la previsione live.
+    StructField("channel", StringType()),
+    StructField("burst_delta", DoubleType()),
+    StructField("burst_duration_s", DoubleType()),
+    StructField("burst_interval_s", DoubleType()),
 ])
 
 INJECTED_FAULTS_SCHEMA = StructType([
     StructField("fault_id", StringType()),
     StructField("robot_id", StringType()),
+    StructField("run_id", StringType()),
     StructField("fault_type", StringType()),
     StructField("start_time_s", DoubleType()),
     StructField("end_time_s", DoubleType()),

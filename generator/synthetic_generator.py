@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Generatore sintetico di telemetria per lo sweep di scalabilita' (Passo 12)
-e per il pannello di controllo esperimenti della dashboard (Passo 11, estensione).
+"""Generatore sintetico di telemetria per lo sweep di scalabilita' e per il
+pannello di controllo esperimenti della dashboard.
 
 Gazebo non arriva a volumi di decine di migliaia di messaggi/s: qui i robot
 sono semplici "token" che percorrono il grafo del magazzino (stessa fonte di
@@ -10,18 +10,18 @@ rispettano **esattamente lo stesso schema di telemetria** di kafka_bridge.py
 (CLAUDE.md e' l'unica fonte di verita' per lo schema).
 
 Supporta anche l'iniezione di guasti (stesso fault_schedule/firme di
-kafka_bridge.py, Passo 6): utile per generare ground truth in injected_faults
-anche sul carico sintetico, non solo sulla pipeline ROS reale.
+kafka_bridge.py): utile per generare ground truth in injected_faults anche
+sul carico sintetico, non solo sulla pipeline ROS reale.
 
 Il carico e' controllato da due manopole indipendenti:
   --num-robots: quanti robot "token" (scala orizzontale della flotta)
   --hz:         quante telemetrie al secondo pubblica ciascuno
 Il throughput aggregato di targa e' num_robots * hz; lo script misura e
 stampa periodicamente il throughput realmente raggiunto (utile per trovare
-il punto di rottura al Passo 13). Se il collo di bottiglia diventa il
-processo Python stesso (singolo processo, GIL) prima di Kafka/Spark, si
-possono lanciare piu' istanze in parallelo (piu' processi, prefissi
-robot-id diversi) invece di complicare questo script con multiprocessing.
+il punto di rottura). Se il collo di bottiglia diventa il processo Python
+stesso (singolo processo, GIL) prima di Kafka/Spark, si possono lanciare
+piu' istanze in parallelo (piu' processi, prefissi robot-id diversi)
+invece di complicare questo script con multiprocessing.
 
 Il modulo espone anche `run_generator(...)`, usato sia da `main()` (CLI)
 sia da `generator_service.py` (controllo dalla dashboard via HTTP, in un
@@ -35,20 +35,36 @@ import os
 import random
 import threading
 import time
+import uuid
 
 from confluent_kafka import Producer
 
 # Parametri di default per ciascun tipo di guasto -- stessi valori di
-# esempio gia' usati in config/experiment.json (Passo 6), cosi' un guasto
-# iniettato dal generatore e uno iniettato da kafka_bridge.py hanno lo
-# stesso ordine di grandezza. La dashboard chiede solo robot/tipo/timing,
-# non tutti i parametri della firma: questi coprono il resto.
+# esempio gia' usati in config/experiment.json, cosi' un guasto iniettato
+# dal generatore e uno iniettato da kafka_bridge.py hanno lo stesso ordine
+# di grandezza. La dashboard chiede solo robot/tipo/timing, non tutti i
+# parametri della firma: questi coprono il resto.
 DEFAULT_FAULT_PARAMS = {
     "deriva_termica": {"ramp_rate_c_per_s": 0.15, "plateau_temp_c": 85.0, "ramp_duration_s": 300},
     "spike_corrente": {"peak_a": 4.5, "rise_time_s": 5, "hold_duration_s": 55},
     "batteria_collasso": {"drain_rate_multiplier": 8.0, "trigger_pct": 60.0},
     "sensore_bloccato": {"frozen_channel": "min_obstacle_dist", "freeze_duration_s": 60},
+    "preavviso_intermittente": {"channel": "motor_current", "burst_delta": 0.7, "burst_duration_s": 3.0, "burst_interval_s": 15.0},
+    # Perturbazione (vedi kafka_bridge.py per la spiegazione completa):
+    # rumore gaussiano extra su un canale, non un guasto -- esclusa da
+    # injected_faults (vedi NON_GROUND_TRUTH_FAULT_TYPES), cosi' un falso
+    # positivo "salute" durante la sua finestra resta un falso positivo per
+    # offline/adaptive_thresholds.py, non un vero guasto.
+    "rumore_sensore": {"channel": "motor_current"},
 }
+
+PERTURBATION_NOISE_STD_BY_CHANNEL = {
+    "motor_temp": 6.0,
+    "motor_current": 0.35,
+    "battery_pct": 3.0,
+}
+
+NON_GROUND_TRUTH_FAULT_TYPES = {"rumore_sensore"}
 
 
 def load_config(config_dir):
@@ -62,11 +78,24 @@ def load_graph(graph_file):
         return json.load(f)
 
 
+# DEPOSITO/RISERVA* (config/warehouse_graph.json) sono nodi dedicati alla
+# flotta REALE (repair_node/reserve_node/start_node dei robot di riserva) --
+# il generatore sintetico non ha un concetto di riparazione o riserva,
+# quindi non deve mai spawnare ne' instradare un robot-token li'.
+ROUTABLE_KINDS_EXCLUDED = {"repair", "reserve"}
+
+
 def build_adjacency(graph):
-    node_pos = {n["id"]: (n["x"], n["y"]) for n in graph["nodes"]}
+    node_pos = {
+        n["id"]: (n["x"], n["y"])
+        for n in graph["nodes"]
+        if n.get("kind") not in ROUTABLE_KINDS_EXCLUDED
+    }
     edge_by_pair = {}
     adjacency = {n: [] for n in node_pos}
     for e in graph["edges"]:
+        if e["from"] not in node_pos or e["to"] not in node_pos:
+            continue
         edge_by_pair[(e["from"], e["to"])] = e
         edge_by_pair[(e["to"], e["from"])] = e
         adjacency[e["from"]].append(e["to"])
@@ -76,17 +105,18 @@ def build_adjacency(graph):
 
 class FaultInjector:
     """Applica un fault_schedule (stesso formato e stesse firme di
-    kafka_bridge.py, Passo 6) alla telemetria sintetica di un robot, e logga
-    ogni istanza su injected_faults -- stessa ground truth della pipeline
-    ROS reale, cosi' precision/recall (Passo 13) si calcolano allo stesso
-    modo sia sui dati reali sia su quelli del generatore."""
+    kafka_bridge.py) alla telemetria sintetica di un robot, e logga ogni
+    istanza su injected_faults -- stessa ground truth della pipeline ROS
+    reale, cosi' precision/recall si calcolano allo stesso modo sia sui
+    dati reali sia su quelli del generatore."""
 
-    def __init__(self, robot_id, fault_schedule, producer, t0, get_live_value, log=print):
+    def __init__(self, robot_id, fault_schedule, producer, t0, get_live_value, run_id=None, log=print):
         self.robot_id = robot_id
         self.schedule = {f["fault_id"]: f for f in fault_schedule if f["robot_id"] == robot_id}
         self.producer = producer
         self.t0 = t0
         self.get_live_value = get_live_value
+        self.run_id = run_id
         self.log = log
         self.active = {}
 
@@ -129,10 +159,38 @@ class FaultInjector:
                 message["motor_current"] = round(value, 3)
             elif ftype == "sensore_bloccato":
                 message[p["frozen_channel"]] = self.active[fault_id]["frozen_value"]
+            elif ftype == "preavviso_intermittente":
+                channel = p["channel"]
+                phase_s = elapsed_in_fault % p["burst_interval_s"]
+                if phase_s < p["burst_duration_s"]:
+                    message[channel] = round(message[channel] + p["burst_delta"], 3)
+            elif ftype == "rumore_sensore":
+                channel = p["channel"]
+                extra_std = PERTURBATION_NOISE_STD_BY_CHANNEL[channel]
+                message[channel] = round(message[channel] + random.gauss(0, extra_std), 3)
 
     def flush_active(self):
         for fault_id in list(self.active):
             self._deactivate(self.schedule[fault_id])
+
+    def inject_live(self, fault_type, duration_s, params=None):
+        """Aggiunge un guasto allo schedule a runtime, mentre il generatore
+        e' gia' in esecuzione: stesso dict-shape di una entry pianificata,
+        quindi update_battery_multiplier()/apply_to_message() lo gestiscono
+        automaticamente al prossimo tick, senza logica separata."""
+        elapsed = self._elapsed()
+        fault_id = f"LIVE-{uuid.uuid4().hex[:8]}"
+        fault = {
+            "fault_id": fault_id,
+            "robot_id": self.robot_id,
+            "fault_type": fault_type,
+            "start_time_s": elapsed,
+            "end_time_s": elapsed + duration_s,
+            "params": params or dict(DEFAULT_FAULT_PARAMS[fault_type]),
+        }
+        self.schedule[fault_id] = fault
+        self.log(f"{self.robot_id}: guasto live '{fault_id}' ({fault_type}) programmato, durata {duration_s}s")
+        return fault_id
 
     def _activate(self, fault):
         self.log(f"{self.robot_id}: guasto '{fault['fault_id']}' ({fault['fault_type']}) ATTIVATO")
@@ -145,9 +203,12 @@ class FaultInjector:
         fault_id = fault["fault_id"]
         entry = self.active.pop(fault_id)
         self.log(f"{self.robot_id}: guasto '{fault_id}' ({fault['fault_type']}) disattivato")
+        if fault["fault_type"] in NON_GROUND_TRUTH_FAULT_TYPES:
+            return
         record = {
             "fault_id": fault_id,
             "robot_id": self.robot_id,
+            "run_id": self.run_id,
             "fault_type": fault["fault_type"],
             "start_time_s": fault["start_time_s"],
             "end_time_s": fault["end_time_s"],
@@ -170,7 +231,7 @@ class VirtualRobot:
     'blocked'/'charging': non simuliamo scenari, solo carico (+ guasti,
     se richiesti)."""
 
-    def __init__(self, robot_id, node_pos, adjacency, edge_by_pair, speed_mps, health_cfg, rng):
+    def __init__(self, robot_id, node_pos, adjacency, edge_by_pair, speed_mps, health_cfg, rng, run_id=None):
         self.robot_id = robot_id
         self.node_pos = node_pos
         self.adjacency = adjacency
@@ -178,6 +239,7 @@ class VirtualRobot:
         self.speed_mps = speed_mps
         self.health_cfg = health_cfg
         self.rng = rng
+        self.run_id = run_id
 
         self.current_node = rng.choice(list(node_pos))
         self.prev_node = None
@@ -226,6 +288,7 @@ class VirtualRobot:
         message = {
             "ts": int(now * 1000),
             "robot_id": self.robot_id,
+            "run_id": self.run_id,
             "x": round(x, 4),
             "y": round(y, 4),
             "theta": round(theta, 4),
@@ -275,13 +338,26 @@ def run_generator(
     config_dir, graph_file, num_robots, hz, speed_mps, duration_s,
     robot_id_prefix="SIM", stats_interval_s=5.0, seed=None,
     kafka_bootstrap="kafka:9092", faults=None, stop_event=None, status=None, log=print,
+    run_id=None, fault_injectors_out=None,
 ):
     """Corpo del generatore, riusabile sia da CLI (main()) sia da un
     servizio HTTP di controllo (generator_service.py). `status`, se
     passato, e' un dict aggiornato in tempo reale (thread-safe per un solo
-    scrittore); `stop_event` (threading.Event) permette lo stop anticipato."""
+    scrittore); `stop_event` (threading.Event) permette lo stop anticipato.
+
+    `run_id`: identifica questa esecuzione (isolamento dati fra run diversi
+    -- i robot-token riusano lo stesso robot_id ad ogni run, es. SIM00000,
+    quindi senza un run_id previsioni/query storiche mischierebbero run
+    diversi). Se non passato (uso CLI diretto) se ne genera uno.
+
+    `fault_injectors_out`, se passato, viene popolato con {robot_id: FaultInjector}
+    per ogni robot del run: permette al servizio HTTP di iniettare un guasto o
+    una perturbazione mentre il run e' gia' in corso (stesso meccanismo
+    reattivo della flotta reale)."""
     if status is None:
         status = {}
+    if run_id is None:
+        run_id = uuid.uuid4().hex[:8]
     rng = random.Random(seed)
 
     experiment = load_config(config_dir)
@@ -291,13 +367,13 @@ def run_generator(
 
     robot_ids = [f"{robot_id_prefix}{i:05d}" for i in range(num_robots)]
     robots = [
-        VirtualRobot(rid, node_pos, adjacency, edge_by_pair, speed_mps, health_cfg, rng)
+        VirtualRobot(rid, node_pos, adjacency, edge_by_pair, speed_mps, health_cfg, rng, run_id=run_id)
         for rid in robot_ids
     ]
 
     target_rate = num_robots * hz
     log(
-        f"Generatore sintetico: {num_robots} robot x {hz}Hz = target {target_rate:.0f} msg/s, "
+        f"Generatore sintetico: run_id={run_id}, {num_robots} robot x {hz}Hz = target {target_rate:.0f} msg/s, "
         f"durata {duration_s:.0f}s, grafo {os.path.basename(graph_file)}, bootstrap {kafka_bootstrap}"
     )
 
@@ -317,10 +393,20 @@ def run_generator(
     resolved_faults = _resolve_faults(faults, robot_ids, rng)
     if resolved_faults:
         log(f"Guasti pianificati: {[(f['fault_id'], f['robot_id'], f['fault_type']) for f in resolved_faults]}")
+    # Un injector per ogni robot, non solo per quelli con un guasto
+    # pianificato: un FaultInjector senza schedule non fa nulla (costo
+    # trascurabile), ma cosi' qualunque robot puo' ricevere un guasto/una
+    # perturbazione iniettati a runtime via fault_injectors_out.
     fault_injectors = {
-        rid: FaultInjector(rid, resolved_faults, producer, start, get_live_value=lambda ch, r=rid: _last_value(robots, r, ch), log=log)
-        for rid in {f["robot_id"] for f in resolved_faults}
+        rid: FaultInjector(
+            rid, resolved_faults, producer, start,
+            get_live_value=lambda ch, r=rid: _last_value(robots, r, ch), run_id=run_id, log=log,
+        )
+        for rid in robot_ids
     }
+    if fault_injectors_out is not None:
+        fault_injectors_out.clear()
+        fault_injectors_out.update(fault_injectors)
 
     period = 1.0 / hz
     now = start
@@ -333,7 +419,7 @@ def run_generator(
     last_stats = start
     errors = 0
 
-    status.update(running=True, sent=0, target_rate_msgs_s=target_rate, achieved_rate_msgs_s=0.0, errors=0, started_at=start)
+    status.update(running=True, run_id=run_id, sent=0, target_rate_msgs_s=target_rate, achieved_rate_msgs_s=0.0, errors=0, started_at=start)
 
     while True:
         now = time.time()
@@ -405,6 +491,7 @@ def parse_args():
     p.add_argument("--stats-interval-s", type=float, default=5.0)
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--faults-json", default="[]", help='es. \'[{"robot_id":"SIM00000","fault_type":"spike_corrente","start_time_s":10,"duration_s":30}]\'')
+    p.add_argument("--run-id", default=None, help="id di questa esecuzione (default: generato automaticamente)")
     return p.parse_args()
 
 
@@ -423,6 +510,7 @@ def main():
         seed=args.seed,
         kafka_bootstrap=args.kafka_bootstrap,
         faults=json.loads(args.faults_json),
+        run_id=args.run_id,
     )
 
 

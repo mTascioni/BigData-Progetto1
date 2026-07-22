@@ -14,6 +14,7 @@ import predictionsRouter from "./routes/predictions.js";
 import tagRouter from "./routes/tag.js";
 import * as anomalyStream from "./services/anomalyStream.js";
 import * as fleetStateStore from "./services/fleetStateStore.js";
+import * as rawStream from "./services/rawStream.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -62,6 +63,13 @@ anomalyStream.onEvent((event) => {
   }
 });
 
+rawStream.onRawMessage(({ topic, value, ts }) => {
+  const message = JSON.stringify({ type: "raw", topic, value, ts });
+  for (const client of wss.clients) {
+    if (client.readyState === client.OPEN) client.send(message);
+  }
+});
+
 server.listen(port, () => {
   console.log(`backend listening on port ${port}`);
 });
@@ -72,4 +80,8 @@ fleetStateStore.start().catch((err) => {
 
 anomalyStream.start().catch((err) => {
   console.error("[anomalyStream] errore di avvio consumer Kafka:", err.message);
+});
+
+rawStream.start().catch((err) => {
+  console.error("[rawStream] errore di avvio consumer Kafka:", err.message);
 });

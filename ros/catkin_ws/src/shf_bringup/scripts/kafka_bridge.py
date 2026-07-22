@@ -6,11 +6,10 @@ nello schema condiviso (CLAUDE.md), sintetizzando i canali di salute
 (nominale + rumore) e mappando la posizione sull'arco del grafo piu' vicino.
 Pubblica su Kafka, topic `telemetry`, partizionato per robot_id (message key
 = robot_id). Applica anche il `fault_schedule` di config/experiment.json
-(layer di fault injection, Passo 6): quando un guasto e' attivo per questo
-robot, la sua firma viene sommata/applicata alla telemetria prima di
-pubblicare, e l'istanza del guasto (con i timestamp reali di
-attivazione/disattivazione) viene loggata sul topic `injected_faults` --
-ground truth per la valutazione del Passo 13.
+(layer di fault injection): quando un guasto e' attivo per questo robot, la
+sua firma viene sommata/applicata alla telemetria prima di pubblicare, e
+l'istanza del guasto (con i timestamp reali di attivazione/disattivazione)
+viene loggata sul topic `injected_faults` -- ground truth per la valutazione.
 """
 import json
 import math
@@ -28,8 +27,8 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 
-# Parametri di default per un guasto iniettato dal vivo (Passo 14, dashboard
-# -> fleet_control_service.py -> qui) quando il chiamante specifica solo
+# Parametri di default per un guasto iniettato dal vivo (dashboard ->
+# fleet_control_service.py -> qui) quando il chiamante specifica solo
 # fault_type/duration_s: stessi ordini di grandezza degli esempi di
 # fault_schedule in config/experiment.json, cosi' un guasto live si comporta
 # come uno "vero" senza dover esporre tutti i parametri nella UI.
@@ -38,7 +37,39 @@ DEFAULT_LIVE_FAULT_PARAMS = {
     "spike_corrente": {"peak_a": 4.5, "rise_time_s": 5, "hold_duration_s": 55},
     "batteria_collasso": {"drain_rate_multiplier": 8.0, "trigger_pct": 60.0},
     "sensore_bloccato": {"frozen_channel": "min_obstacle_dist", "freeze_duration_s": 60},
+    # Preavviso: raffiche saltuarie (ogni burst_interval_s, per
+    # burst_duration_s) che spingono il canale oltre la soglia "morbida" del
+    # rilevatore di previsione live (detection_job.py) ma non quella dura --
+    # simula un robot che si sta avvicinando a un guasto vero, non uno gia'
+    # rotto. Default: motor_current 1.5A nominale + 0.7 = 2.2A durante una
+    # raffica, sopra la soglia morbida (2.0A) ma sotto quella dura (2.5A).
+    "preavviso_intermittente": {"channel": "motor_current", "burst_delta": 0.7, "burst_duration_s": 3.0, "burst_interval_s": 15.0},
+    # Perturbazione, non un guasto: rumore gaussiano extra su un canale, per
+    # generare falsi positivi CONTROLLATI e verificare che
+    # offline/adaptive_thresholds.py li impari a filtrare. Il solo parametro
+    # che il chiamante deve specificare e' il canale -- l'ampiezza del
+    # rumore (vedi PERTURBATION_NOISE_STD_BY_CHANNEL) e' fissa, calibrata a
+    # mano per sconfinare la soglia dura solo occasionalmente (rumore, non
+    # un trend), altrimenti sarebbe indistinguibile da un preavviso_intermittente.
+    "rumore_sensore": {"channel": "motor_current"},
 }
+
+# Deviazione standard extra sommata al rumore nominale del canale (vedi
+# health_channels_nominal in config/experiment.json) durante una
+# perturbazione: abbastanza ampia da far scattare un falso positivo di
+# tanto in tanto (qualche escursione a 3 sigma oltre soglia dura), non ad
+# ogni tick -- se sconfinasse sempre sarebbe un guasto, non rumore.
+PERTURBATION_NOISE_STD_BY_CHANNEL = {
+    "motor_temp": 6.0,
+    "motor_current": 0.35,
+    "battery_pct": 3.0,
+}
+
+# fault_type che NON sono guasti veri (ground truth di injected_faults per
+# precision/recall): una perturbazione non va loggata li' -- se lo fosse,
+# adaptive_thresholds.py la conterebbe come "vero guasto" invece che come
+# il falso positivo che deve imparare a filtrare.
+NON_GROUND_TRUTH_FAULT_TYPES = {"rumore_sensore"}
 
 
 def load_config(config_dir):
@@ -85,12 +116,13 @@ class FaultInjector:
     al momento in cui questo nodo e' partito.
     """
 
-    def __init__(self, robot_id, fault_schedule, producer, t0, get_live_value):
+    def __init__(self, robot_id, fault_schedule, producer, t0, get_live_value, run_id=None):
         self.robot_id = robot_id
         self.schedule = {f["fault_id"]: f for f in fault_schedule if f["robot_id"] == robot_id}
         self.producer = producer
         self.t0 = t0
         self.get_live_value = get_live_value  # channel(str) -> valore corrente non-faultato
+        self.run_id = run_id
         self.active = {}  # fault_id -> {"start_wall_ts": ms, "frozen_value": ...}
 
     def _elapsed(self):
@@ -147,9 +179,26 @@ class FaultInjector:
             elif ftype == "sensore_bloccato":
                 message[p["frozen_channel"]] = self.active[fault_id]["frozen_value"]
 
+            elif ftype == "preavviso_intermittente":
+                # Onda quadra periodica: raffica per burst_duration_s ogni
+                # burst_interval_s, altrimenti il canale resta nominale --
+                # a differenza degli altri guasti, qui il valore torna al
+                # nominale fra una raffica e l'altra (per costruzione, non un
+                # bug): e' esattamente il pattern "saltuario" che il
+                # rilevatore di previsione deve riconoscere come tendenza.
+                channel = p["channel"]
+                phase_s = elapsed_in_fault % p["burst_interval_s"]
+                if phase_s < p["burst_duration_s"]:
+                    message[channel] = round(message[channel] + p["burst_delta"], 3)
+
+            elif ftype == "rumore_sensore":
+                channel = p["channel"]
+                extra_std = PERTURBATION_NOISE_STD_BY_CHANNEL[channel]
+                message[channel] = round(message[channel] + random.gauss(0, extra_std), 3)
+
     def inject_live(self, fault_type, duration_s, params=None):
-        """Aggiunge un guasto allo schedule *a runtime* (Passo 14): stesso
-        dict-shape di una entry di fault_schedule letta da experiment.json,
+        """Aggiunge un guasto allo schedule *a runtime*: stesso dict-shape
+        di una entry di fault_schedule letta da experiment.json,
         quindi update_battery_multiplier()/apply_to_message() lo gestiscono
         automaticamente al prossimo tick, senza nessuna logica speciale --
         finisce nel topic `telemetry` reale come un guasto pre-schedulato,
@@ -187,9 +236,17 @@ class FaultInjector:
         fault_id = fault["fault_id"]
         entry = self.active.pop(fault_id)
         rospy.loginfo("%s: guasto '%s' (%s) disattivato", self.robot_id, fault_id, fault["fault_type"])
+        if fault["fault_type"] in NON_GROUND_TRUTH_FAULT_TYPES:
+            # Una perturbazione non e' un guasto vero (vedi
+            # NON_GROUND_TRUTH_FAULT_TYPES sopra): niente riga in
+            # injected_faults, cosi' un'eventuale anomalia "salute" rilevata
+            # durante la sua finestra resta un falso positivo per
+            # adaptive_thresholds.py, non un vero positivo.
+            return
         record = {
             "fault_id": fault_id,
             "robot_id": self.robot_id,
+            "run_id": self.run_id,
             "fault_type": fault["fault_type"],
             "start_time_s": fault["start_time_s"],
             "end_time_s": fault["end_time_s"],
@@ -215,6 +272,10 @@ class KafkaBridge:
         config_dir = rospy.get_param("~config_dir", "/workspace/config")
         kafka_bootstrap = rospy.get_param("~kafka_bootstrap", "kafka:9092")
         self.publish_hz = rospy.get_param("~publish_hz", 2.0)
+        # Isolamento dati fra avvii diversi della flotta reale (vedi
+        # fleet_control_service.py, /tmp/shf_run_id); vuoto se il nodo e'
+        # partito senza passare per fleet_control_service.py (es. CLI).
+        self.run_id = rospy.get_param("~run_id", "") or None
 
         graph, experiment = load_config(config_dir)
         self.node_pos = {n["id"]: (n["x"], n["y"]) for n in graph["nodes"]}
@@ -236,7 +297,7 @@ class KafkaBridge:
         self.producer = Producer({"bootstrap.servers": kafka_bootstrap})
         self.fault_injector = FaultInjector(
             self.robot_id, experiment["fault_schedule"], self.producer, time.time(),
-            get_live_value=lambda channel: getattr(self, channel),
+            get_live_value=lambda channel: getattr(self, channel), run_id=self.run_id,
         )
         self.have_active_goal = False
         self.goal_node = None
@@ -248,8 +309,8 @@ class KafkaBridge:
         rospy.Subscriber("scan", LaserScan, self._on_scan, queue_size=5)
         rospy.Subscriber("move_base/goal", MoveBaseActionGoal, self._on_goal, queue_size=5)
         rospy.Subscriber("move_base/result", MoveBaseActionResult, self._on_result, queue_size=5)
-        # Iniezione guasto dal vivo (Passo 14): fleet_control_service.py
-        # pubblica qui {"fault_type": "...", "duration_s": ..., "params": {...}?}.
+        # Iniezione guasto dal vivo: fleet_control_service.py pubblica qui
+        # {"fault_type": "...", "duration_s": ..., "params": {...}?}.
         rospy.Subscriber("~fault_inject", String, self._on_fault_inject, queue_size=5)
 
     def _on_fault_inject(self, msg):
@@ -334,6 +395,7 @@ class KafkaBridge:
             message = {
                 "ts": int(time.time() * 1000),
                 "robot_id": self.robot_id,
+                "run_id": self.run_id,
                 "x": round(self.x, 4),
                 "y": round(self.y, 4),
                 "theta": round(self.theta, 4),

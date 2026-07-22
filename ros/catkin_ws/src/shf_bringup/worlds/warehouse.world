@@ -1,6 +1,6 @@
 <?xml version="1.0" ?>
 <!--
-  Mondo Gazebo del magazzino (Passo 14): stesse coordinate di
+  Mondo Gazebo del magazzino: stesse coordinate di
   config/warehouse_graph.json, ancora un piano prevalentemente vuoto (i
   robot navigano per grafo logico, non per SLAM/mappa statica - vedi
   docs/passi/03-bringup-ros-gazebo.md), con l'aggiunta di due "tunnel" di
@@ -10,7 +10,7 @@
 
   Larghezza libera del corridoio: 0.8m (vedi docs/passi/14 per la nota di
   tuning: e' un valore di partenza, verificato empiricamente che basti per
-  un burger e non per due affiancati -- non un dato che si puo' fissare a
+  un burger e non per due affiancati, non un dato che si puo' fissare a
   tavolino senza provarlo).
 -->
 <sdf version="1.6">

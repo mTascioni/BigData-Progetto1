@@ -1,5 +1,5 @@
 {
-  "description": "Preset 'grande' per il pannello di controllo del generatore sintetico (Passo 11, estensione): griglia 5x5 (25 nodi, 40 archi), utile per distribuire migliaia di robot-token su piu' percorsi durante lo sweep di scalabilita' (Passo 13). Riga e colonna centrali marcate capacity=1 come choke point. Non usato da ROS/Gazebo.",
+  "description": "Preset 'grande' per il pannello di controllo del generatore sintetico: griglia 5x5 (25 nodi, 40 archi), utile per distribuire migliaia di robot-token su piu' percorsi durante lo sweep di scalabilita'. Riga e colonna centrali marcate capacity=1 come choke point. Non usato da ROS/Gazebo.",
   "nodes": [
     {
       "id": "R0C0",

@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
-"""Calibra le soglie di salute (Passo 7: motor_temp/motor_current/battery_pct)
-sullo storico reale, per ridurre i falsi positivi -- il "job che tara
-soglie adattive" del Passo 8.
+"""Calibra le soglie di salute (motor_temp/motor_current/battery_pct)
+sullo storico reale, per ridurre i falsi positivi.
 
-Usa `injected_faults` (Passo 6) come ground truth per distinguere, fra le
-anomalie di tipo "salute" gia' scritte da detection_job.py, quelle vere
-(cadono dentro la finestra di un guasto reale) da quelle false. Per ogni
-canale con troppi falsi positivi, allarga la soglia fino a un percentile
-alto (o basso, per la batteria) dei valori osservati nei periodi NOMINALI
-(fuori da ogni finestra di guasto) -- cosi' il rumore nominale non la fa
-piu' scattare, senza bisogno di sapere a priori quanto rumore ci sia.
+Usa `injected_faults` come ground truth per distinguere, fra le anomalie
+di tipo "salute" gia' scritte da detection_job.py, quelle vere (cadono
+dentro la finestra di un guasto reale) da quelle false. Per ogni canale
+con troppi falsi positivi, allarga la soglia fino a un percentile alto (o
+basso, per la batteria) dei valori osservati nei periodi NOMINALI (fuori
+da ogni finestra di guasto) -- cosi' il rumore nominale non la fa piu'
+scattare, senza bisogno di sapere a priori quanto rumore ci sia.
 
 Scrive /data/adaptive_thresholds.json. detection_job.py lo rilegge al
-prossimo avvio: e' il "feedback verso lo streaming" richiesto dal piano --
-non hot-reload a caldo (fuori scopo per un job Spark gia' in esecuzione),
-ma calibrazione fra una run e la successiva.
+prossimo avvio: e' il feedback verso lo streaming -- non hot-reload a
+caldo (fuori scopo per un job Spark gia' in esecuzione), ma calibrazione
+fra una run e la successiva.
 """
 import argparse
 import glob

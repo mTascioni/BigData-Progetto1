@@ -1,15 +1,14 @@
-"""Effectiveness della detection (Passo 7): veri/falsi positivi sui tre
-meccanismi (salute, livelock, deadlock). Due stili di test:
+"""Effectiveness della detection: veri/falsi positivi sui tre meccanismi
+(salute, livelock, deadlock). Due stili di test:
 
-- **messaggi sintetici diretti su Kafka** (stesso approccio della verifica
-  originale del Passo 7): controllo pieno su valori/timing, veloce,
-  isola la logica di detection da tutto il resto.
-- **generatore sintetico con guasti** (Passo 12): copre l'integrazione
-  reale end-to-end (generatore -> Kafka -> Spark -> anomalies).
+- **messaggi sintetici diretti su Kafka**: controllo pieno su valori/timing,
+  veloce, isola la logica di detection da tutto il resto.
+- **generatore sintetico con guasti**: copre l'integrazione reale
+  end-to-end (generatore -> Kafka -> Spark -> anomalies).
 
 Il test piu' importante di questo file e' `test_nessun_falso_positivo_livelock_su_robot_in_movimento`:
-regression test diretto del bug di falsi positivi corretto il 2026-07-21
-(vedi docs/passi/07-detection-streaming.md) -- prima del fix, questo stesso
+regression test diretto di un bug di falsi positivi (vedi
+docs/passi/07-detection-streaming.md) -- prima del fix, questo stesso
 scenario (robot che percorre normalmente un arco lungo) faceva scattare
 livelock quasi sempre.
 
@@ -51,10 +50,10 @@ def test_salute_vero_positivo_su_temperatura_oltre_soglia(kafka_producer):
     kafka_producer.flush(5)
 
     # timeout piu' largo di quanto servirebbe alla query di salute da sola
-    # (trigger 2s): il livelock come stato per-robot (fix del 2026-07-21)
-    # e' piu' pesante della vecchia aggregazione a finestre e condivide gli
-    # stessi core, quindi in pratica la query di salute puo' restare
-    # indietro di qualche secondo in piu' sotto carico concorrente.
+    # (trigger 2s): il livelock come stato per-robot e' piu' pesante di
+    # un'aggregazione a finestre e condivide gli stessi core, quindi in
+    # pratica la query di salute puo' restare indietro di qualche secondo
+    # in piu' sotto carico concorrente.
     events = collect_messages(
         consumer, timeout_s=25,
         predicate=lambda e: e.get("type") == "salute" and e.get("robot_id") == robot_id,
@@ -82,8 +81,8 @@ def test_salute_nessun_falso_positivo_su_valori_nominali(kafka_producer):
 
 
 def test_livelock_vero_positivo_robot_fermo_ma_task_state_moving(kafka_producer):
-    """Livelock come stato esplicito per-robot (fix del 2026-07-21, vedi
-    sopra): l'anomalia scatta solo dopo LIVELOCK_CONFIRM_DURATION_S (60s)
+    """Livelock come stato esplicito per-robot (vedi sopra): l'anomalia
+    scatta solo dopo LIVELOCK_CONFIRM_DURATION_S (60s)
     *consecutivi* di event time senza progresso, ricampionato ogni
     LIVELOCK_CHECK_INTERVAL_S (10s). Come nel test precedente, cio' che
     conta e' il `ts` dei messaggi (event time), non il tempo reale di
@@ -138,21 +137,21 @@ def test_deadlock_vero_positivo_due_robot_blocked_stesso_arco(kafka_producer):
 
 
 def test_nessun_falso_positivo_livelock_su_robot_in_movimento():
-    """Regression test del fix del 2026-07-21 (docs/passi/07-detection-streaming.md):
+    """Regression test (vedi docs/passi/07-detection-streaming.md):
     robot-token del generatore che percorrono normalmente il grafo (nessun
     guasto) non devono MAI far scattare livelock, indipendentemente da
     quanto a lungo restano "piu' vicini" a un nodo che a un altro durante
     l'attraversamento di un arco. Il generatore non simula mai
     task_state=blocked, quindi il deadlock non e' strutturalmente possibile
     qui: non serve controllarlo in questo test."""
-    # eventuali robot ROS reali (R1/R2/R3, sim multi-robot del Passo 5,
-    # sempre attiva) restano nel flusso: contano solo i falsi positivi sui
-    # robot-token SIM* del generatore, senza guasti.
-    # livelock come stato per-robot (fix del 2026-07-21): un robot in
-    # movimento normale non accumula mai 60s consecutivi senza progresso,
-    # quindi non dovrebbe MAI scattare qui, indipendentemente da quanto si
-    # allunga la raccolta -- il margine e' comunque generoso per coprire la
-    # durata del run PIU' l'eventuale ritardo dei micro-batch sotto carico.
+    # eventuali robot ROS reali (R1/R2/R3, sim multi-robot sempre attiva)
+    # restano nel flusso: contano solo i falsi positivi sui robot-token
+    # SIM* del generatore, senza guasti.
+    # livelock come stato per-robot: un robot in movimento normale non
+    # accumula mai 60s consecutivi senza progresso, quindi non dovrebbe MAI
+    # scattare qui, indipendentemente da quanto si allunga la raccolta -- il
+    # margine e' comunque generoso per coprire la durata del run PIU'
+    # l'eventuale ritardo dei micro-batch sotto carico.
     consumer = start_consumer("anomalies")
     start_generator({"num_robots": 4, "hz": 3, "duration_s": 60, "graph_preset": "medium"})
 

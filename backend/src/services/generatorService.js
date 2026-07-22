@@ -26,3 +26,11 @@ export function stopRun() {
 export function getStatus() {
   return call("/status");
 }
+
+export function injectFault(robotId, faultType, durationS, params) {
+  return call("/fault/inject", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ robot_id: robotId, fault_type: faultType, duration_s: durationS, params }),
+  });
+}

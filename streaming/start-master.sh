@@ -1,10 +1,9 @@
 #!/bin/bash
 # Avvia il master Spark (comportamento originale dell'immagine bitnami,
 # invariato) e, in aggiunta, i due servizi Spark persistenti del progetto:
-# query_service.py (layer TAG, Passo 10) e detection_job.py (detection
-# real-time, Passo 7). Cosi' l'intera pipeline parte con un solo
-# `docker compose up`, senza dover lanciare nulla a mano via `docker exec`
-# dopo il boot (vedi docs/passi/01-scaffold-infrastruttura.md).
+# query_service.py (layer TAG) e detection_job.py (detection real-time).
+# Cosi' l'intera pipeline parte con un solo `docker compose up`, senza
+# dover lanciare nulla a mano via `docker exec` dopo il boot.
 #
 # Usato solo dal servizio spark-master in docker-compose.yml (override di
 # `command:`); spark-worker resta sul CMD originale dell'immagine.
@@ -19,45 +18,24 @@ until curl -sf http://localhost:8080 > /dev/null 2>&1; do
 done
 echo "[start-master] master pronto, avvio query_service.py e detection_job.py"
 
-# Bug reale trovato il 2026-07-21 (non solo in questa sandbox: capita a
-# chiunque avvii tutto lo stack insieme con `docker compose up`): il master
-# Spark risponde su :8080 non appena parte, ma Kafka puo' metterci ancora
-# qualche secondo a essere davvero pronto (KRaft, creazione dei topic).
-# spark-submit, per una query Kafka Structured Streaming, deve risolvere le
-# partizioni del topic all'avvio -- se Kafka non e' ancora pronto lancia
-# UnknownTopicOrPartitionException e l'intero processo muore, UNA VOLTA SOLA,
-# senza nessun retry (a differenza dei consumer Node del backend, che gia'
-# ritentano ogni 5s per lo stesso motivo, vedi fleetStateStore.js). Risultato
-# visibile all'utente: la dashboard resta vuota a tempo indeterminato (nessun
-# messaggio arriva mai su fleet_state) anche se ROS/Gazebo funzionano
-# normalmente -- sembra che "la simulazione parta con molto ritardo", ma in
-# realta' e' questo processo che non e' mai partito per davvero. Fix: un
-# ciclo di retry attorno a ciascun spark-submit, stesso principio dei
-# consumer Node, cosi' un fallimento transitorio all'avvio si autocorregge
-# invece di lasciare la pipeline morta finche' qualcuno non se ne accorge e
-# rilancia a mano.
+# Il master Spark risponde su :8080 non appena parte, ma Kafka puo'
+# metterci ancora qualche secondo a essere davvero pronto (KRaft, creazione
+# dei topic). spark-submit, per una query Kafka Structured Streaming, deve
+# risolvere le partizioni del topic all'avvio -- se Kafka non e' ancora
+# pronto lancia UnknownTopicOrPartitionException e l'intero processo muore,
+# senza retry. Un ciclo di retry attorno a ciascun spark-submit fa si' che
+# un fallimento transitorio all'avvio si autocorregga invece di lasciare la
+# pipeline morta finche' qualcuno non se ne accorge e rilancia a mano.
 
-# Split 2/2 fra query_service e detection_job (era 3/8, poi 2/10 costruendo
-# test/ il 2026-07-21, poi 2/4, ora 2/2 lo stesso giorno, insieme al fix di
-# spark.sql.shuffle.partitions in detection_job.py): quel 10 era tarato per
-# il carico PESANTE del generatore sintetico (migliaia di robot-token,
-# Passo 12/13), non per la flotta ROS reale. Sulla flotta reale (4-8 robot)
-# e' un problema diverso e piu' serio: i core dati a Spark competono
-# direttamente con Gazebo per la CPU della stessa macchina, e l'operatore
-# stateful del livelock (applyInPandasWithState, Passo 7) apre un processo
-# Python separato per micro-batch -- osservato empiricamente decine di
-# processi "pyspark.daemon" concorrenti anche con soli 4 robot reali.
-# Risultato osservato il 2026-07-21: micro-batch da 2s che ne impiegavano
-# 30-65 (e fino a 79 su una macchina ancora piu' satura), fleet_state quasi
-# fermo per decine di secondi alla volta -> sulla dashboard sembra che "la
-# simulazione vada a scatti", ma la causa reale e' contesa di CPU fra Spark
-# e Gazebo, non un problema di rete o di canvas. Sceso da 4 a 2 core per
-# detection_job perche' il volume dati della flotta reale e' bassissimo
-# (4-8 robot a 2Hz): il costo non era processare i dati, era l'overhead di
-# scheduling di Spark stesso -- vedi il fix di shuffle.partitions qui sotto,
-# che riduce quell'overhead alla radice ed e' cio' che rende sostenibile
-# scendere a 2 core senza perdere capacita' sul generatore sintetico.
-# query_service e' interattivo/a bassa frequenza, 2 core bastano comunque.
+# Split 2/2 fra query_service e detection_job: su Gazebo + flotta reale i
+# core dati a Spark competono direttamente con Gazebo per la CPU della
+# stessa macchina, e l'operatore stateful del livelock
+# (applyInPandasWithState) apre un processo Python separato per
+# micro-batch -- con il volume dati bassissimo della flotta reale (4-8
+# robot a 2Hz) il costo non e' processare i dati, e' l'overhead di
+# scheduling di Spark stesso (mitigato anche da shuffle.partitions in
+# detection_job.py). query_service e' interattivo/a bassa frequenza, 2
+# core bastano comunque.
 (
   set +e   # altrimenti "set -e" ereditato dallo script uccide la subshell al primo fallimento, prima che il loop possa ritentare
   while true; do
@@ -70,13 +48,13 @@ echo "[start-master] master pronto, avvio query_service.py e detection_job.py"
   done
 ) &
 
-# stateStore.stateSchemaCheck=false: il livelock (Passo 7, fix del
-# 2026-07-21) usa applyInPandasWithState per lo stato per-robot; il
-# controllo rigido di compatibilita' dello schema di stato di Spark da'
-# un falso positivo ("StateSchemaNotCompatible") su operatori stateful
-# Python anche a schema invariato fra un batch e l'altro -- riproducibile
-# in modo deterministico, non un problema di dati/logica. Disattivato
-# solo per questo (nessun altro job del progetto usa stato arbitrario).
+# stateStore.stateSchemaCheck=false: il livelock usa applyInPandasWithState
+# per lo stato per-robot; il controllo rigido di compatibilita' dello
+# schema di stato di Spark da' un falso positivo ("StateSchemaNotCompatible")
+# su operatori stateful Python anche a schema invariato fra un batch e
+# l'altro -- riproducibile in modo deterministico, non un problema di
+# dati/logica. Disattivato solo per questo (nessun altro job del progetto
+# usa stato arbitrario).
 (
   set +e   # vedi nota sopra: senza questo "set -e" uccide la subshell al primo crash, niente retry
   while true; do

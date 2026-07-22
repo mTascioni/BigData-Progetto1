@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Servizio HTTP di controllo per i run di valutazione sperimentale (Passo 13,
-estensione "risultati live"): la dashboard avvia un run con `POST /run` e ne
-legge l'avanzamento con `GET /status`, invece di aspettare un PNG
-pre-generato aggiornato ogni 30s. Un solo run alla volta (un secondo
-POST /run mentre uno e' attivo viene rifiutato con 409) -- stesso vincolo e
-stesso stile di generator_service.py (Passo 12): http.server nativo, niente
-Flask per poche route.
+"""Servizio HTTP di controllo per i run di valutazione sperimentale: la
+dashboard avvia un run con `POST /run` e ne legge l'avanzamento con
+`GET /status`, invece di aspettare un PNG pre-generato aggiornato ogni 30s.
+Un solo run alla volta (un secondo POST /run mentre uno e' attivo viene
+rifiutato con 409) -- stesso vincolo e stesso stile di
+generator_service.py: http.server nativo, niente Flask per poche route.
 
 A differenza di `python3 run_effectiveness.py` da riga di comando (che resta
 disponibile, produce solo CSV/JSON dentro /data/eval/<run_id>/, niente piu'
@@ -35,11 +34,14 @@ STAGES = {
     "effectiveness": [
         ("detection", run_effectiveness.run_detection_experiment),
         ("prediction", run_effectiveness.run_prediction_experiment),
+        ("live_prediction", run_effectiveness.run_live_prediction_experiment),
         ("tag", run_effectiveness.run_tag_experiment),
     ],
     "efficiency": [
         ("throughput", run_efficiency.run_throughput_sweep),
         ("latency", run_efficiency.run_latency_trials),
+        ("scalability", run_efficiency.run_scalability_experiment),
+        ("selfhealing", run_efficiency.run_selfhealing_latency_experiment),
     ],
 }
 

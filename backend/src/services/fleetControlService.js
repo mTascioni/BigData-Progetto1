@@ -26,8 +26,8 @@ async function get(path) {
   return data;
 }
 
-export function injectFault(robotId, faultType, durationS) {
-  return call("/fault/inject", { robot_id: robotId, fault_type: faultType, duration_s: durationS });
+export function injectFault(robotId, faultType, durationS, params) {
+  return call("/fault/inject", { robot_id: robotId, fault_type: faultType, duration_s: durationS, params });
 }
 
 export function sendToRepair(robotId) {
@@ -42,8 +42,17 @@ export function dispatchMission(robotId, sourceRobotId) {
   return call("/robot/dispatch-mission", { robot_id: robotId, source_robot_id: sourceRobotId });
 }
 
-// Passo 14, estensione 2026-07-21: la simulazione ROS/Gazebo non parte piu'
-// in automatico, la dashboard la avvia/ferma scegliendo la scala.
+// Guasto persistente reale (soglia dura confermata, non una previsione) --
+// il robot si ferma dov'e' invece di essere mandato in riparazione
+// automaticamente, in attesa che l'operatore lo veda e decida (rimetterlo
+// in servizio non ha senso finche' il guasto e' vero e attivo: l'unica
+// azione sensata e' toglierlo dalla flotta, vedi decommissionRobot).
+export function freezeRobot(robotId) {
+  return call("/robot/freeze", { robot_id: robotId });
+}
+
+// La simulazione ROS/Gazebo non parte in automatico, la dashboard la
+// avvia/ferma scegliendo la scala.
 export function startSim(scale) {
   return call("/sim/start", { scale });
 }

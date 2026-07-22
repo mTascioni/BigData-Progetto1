@@ -5,10 +5,10 @@ import { Router } from "express";
 
 import { getEvalStatus, startEvalRun } from "../services/evalService.js";
 
-// Passo 13: risultati di eval/run_effectiveness.py e run_efficiency.py,
-// scritti sul volume Docker condiviso `shf-data` (stesso volume di
-// telemetria/Parquet). Il backend li monta in sola lettura e li serve alla
-// dashboard -- niente scrittura da qui, la producono solo gli script eval/.
+// Risultati di eval/run_effectiveness.py e run_efficiency.py, scritti sul
+// volume Docker condiviso `shf-data` (stesso volume di telemetria/Parquet).
+// Il backend li monta in sola lettura e li serve alla dashboard -- niente
+// scrittura da qui, la producono solo gli script eval/.
 const EVAL_DIR = process.env.EVAL_DIR || "/data/eval";
 
 // solo caratteri "innocui": niente attraversamento di percorso verso il

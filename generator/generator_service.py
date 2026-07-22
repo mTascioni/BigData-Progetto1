@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
-"""Servizio HTTP di controllo per il generatore sintetico (estensione del
-Passo 11/12): processo persistente nel container `ros` che la dashboard
-puo' avviare/fermare/interrogare, invece di dover lanciare
-synthetic_generator.py a mano da CLI. Un solo run alla volta (un secondo
-POST /start mentre uno e' attivo viene rifiutato con 409).
+"""Servizio HTTP di controllo per il generatore sintetico: processo
+persistente nel container `ros` che la dashboard puo' avviare/fermare/
+interrogare, invece di dover lanciare synthetic_generator.py a mano da CLI.
+Un solo run alla volta (un secondo POST /start mentre uno e' attivo viene
+rifiutato con 409).
 
-Stesso stile di streaming/query_service.py (Passo 10): http.server nativo,
-niente Flask per poche route.
+Stesso stile di streaming/query_service.py: http.server nativo, niente
+Flask per poche route.
 """
 import json
 import os
 import threading
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from synthetic_generator import run_generator
+from synthetic_generator import DEFAULT_FAULT_PARAMS, run_generator
 
 CONFIG_DIR = os.environ.get("CONFIG_DIR", "/workspace/config")
 PORT = int(os.environ.get("GENERATOR_SERVICE_PORT", "5001"))
@@ -31,6 +32,7 @@ _thread = None
 _stop_event = None
 _status = {"running": False}
 _log_lines = []
+_fault_injectors = {}  # robot_id -> FaultInjector del run attivo, per l'iniezione live
 MAX_LOG_LINES = 200
 
 
@@ -41,7 +43,7 @@ def _log(line):
         del _log_lines[: len(_log_lines) - MAX_LOG_LINES]
 
 
-def _run_in_thread(config):
+def _run_in_thread(config, run_id):
     global _status
     graph_file = GRAPH_PRESETS.get(config.get("graph_preset", "medium"), GRAPH_PRESETS["medium"])
     try:
@@ -58,6 +60,8 @@ def _run_in_thread(config):
             stop_event=_stop_event,
             status=_status,
             log=_log,
+            run_id=run_id,
+            fault_injectors_out=_fault_injectors,
         )
     except Exception as exc:  # noqa: BLE001 -- riportato via /status, non deve morire silenziosamente
         _log(f"ERRORE nel generatore: {exc}")
@@ -99,13 +103,14 @@ class Handler(BaseHTTPRequestHandler):
                 if config.get("graph_preset", "medium") not in GRAPH_PRESETS:
                     self._send_json(400, {"error": f"graph_preset sconosciuto: {config.get('graph_preset')}"})
                     return
+                run_id = uuid.uuid4().hex[:8]
                 _stop_event = threading.Event()
                 _status.clear()
-                _status.update(running=True, config=config)
+                _status.update(running=True, config=config, run_id=run_id)
                 _log_lines.clear()
-                _thread = threading.Thread(target=_run_in_thread, args=(config,), daemon=True)
+                _thread = threading.Thread(target=_run_in_thread, args=(config, run_id), daemon=True)
                 _thread.start()
-            self._send_json(200, {"started": True, "config": config})
+            self._send_json(200, {"started": True, "config": config, "run_id": run_id})
 
         elif self.path == "/stop":
             with _lock:
@@ -114,6 +119,29 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 _stop_event.set()
             self._send_json(200, {"stopping": True})
+
+        elif self.path == "/fault/inject":
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except json.JSONDecodeError as exc:
+                self._send_json(400, {"error": f"JSON non valido: {exc}"})
+                return
+            if not _status.get("running"):
+                self._send_json(409, {"error": "nessun run in corso"})
+                return
+            robot_id = body.get("robot_id")
+            fault_type = body.get("fault_type")
+            duration_s = float(body.get("duration_s", 30))
+            injector = _fault_injectors.get(robot_id)
+            if injector is None:
+                self._send_json(404, {"error": f"robot sconosciuto nel run attivo: {robot_id}"})
+                return
+            if fault_type not in DEFAULT_FAULT_PARAMS:
+                self._send_json(400, {"error": f"tipo di guasto sconosciuto: {fault_type}"})
+                return
+            fault_id = injector.inject_live(fault_type, duration_s, params=body.get("params"))
+            self._send_json(200, {"ok": True, "fault_id": fault_id})
 
         else:
             self._send_json(404, {"error": "not found"})

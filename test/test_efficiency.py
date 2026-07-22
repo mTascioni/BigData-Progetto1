@@ -1,12 +1,11 @@
-"""Efficiency (Passo 13): throughput a carico crescente col generatore
-sintetico (Passo 12) e latenza onset->alert. A differenza dei test di
-effectiveness, qui le soglie sono volutamente larghe: throughput/latenza
-dipendono dall'hardware su cui gira la suite, l'obiettivo e' individuare
-regressioni vere (crash, throughput vicino a zero, latenza fuori scala),
-non imporre un numero preciso. I valori misurati vengono stampati (usare
-`pytest -s` per vederli) -- sono lo stesso genere di dato che finira' nel
-report del Passo 13 (`eval/`), qui servono solo a verificare che tutto
-funzioni.
+"""Efficiency: throughput a carico crescente col generatore sintetico e
+latenza onset->alert. A differenza dei test di effectiveness, qui le
+soglie sono volutamente larghe: throughput/latenza dipendono dall'hardware
+su cui gira la suite, l'obiettivo e' individuare regressioni vere (crash,
+throughput vicino a zero, latenza fuori scala), non imporre un numero
+preciso. I valori misurati vengono stampati (usare `pytest -s` per
+vederli) -- sono lo stesso genere di dato che finira' nel report
+sperimentale (`eval/`), qui servono solo a verificare che tutto funzioni.
 """
 import time
 

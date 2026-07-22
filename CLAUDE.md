@@ -17,6 +17,10 @@ Piano operativo passo-passo: vedi `PLAN.md`.
 - **Ground truth:** ogni guasto iniettato va loggato in `injected_faults`; è la base per precision/recall.
 - **Si costruisce un passo alla volta** seguendo `PLAN.md`.
 - **Eccezione deliberata (Passo 14): un'anomalia di salute rilevata su un robot reale chiude l'anello.** Fino al Passo 13 il sistema era puramente diagnostico (detect/predict/alert, nessuna azione verso ROS). Su richiesta esplicita dell'utente (demo dal vivo), per la sola **flotta reale** un'anomalia manda il robot colpito verso un nodo di riparazione e dispaccia un robot di riserva dedicato (R4) sulla sua missione — comando minimo ("vai al nodo X"), non robotica di rimedio: resta coerente con "il robot è solo la sorgente dati" perché il *contenuto* della decisione (quale nodo, quale missione) è logica applicativa nel backend, non nel robot. Il generatore sintetico (Passo 12) non è toccato da questo anello. Vedi `docs/passi/14-flotta-reale-e-self-healing.md`.
+- **Reazione differenziata previsione/guasto persistente (Passo 15).** L'anello del Passo 14 si è biforcato: una **previsione** di guasto (rilevata in streaming da raffiche intermittenti/trend che superano una soglia "morbida", non ancora quella dura) attiva la riparazione preventiva + dispaccio riserva di prima; un **guasto persistente confermato** (soglia dura) non manda più il robot in riparazione automaticamente — lo ferma dov'è (`~nav_control` `{"cmd":"freeze"}`) e aspetta che l'operatore lo veda in dashboard e lo decommissioni esplicitamente (il robot sparisce da mappa/tabelle, mai più scelto come riserva). Motivo: un guasto già confermato è per definizione troppo tardi per una manovra preventiva. Vedi `docs/passi/15-previsione-live-deposito-run-id.md`.
+- **Eccezione al "nessun cambio di topologia" (Passo 15).** Il grafo del magazzino ha guadagnato tre nodi dedicati (`DEPOSITO`, `RISERVA1`, `RISERVA2`, fuori dai corridoi principali) per `repair_node`/`reserve_node`/gli start_node dei robot di riserva, che prima coincidevano con nodi di transito di robot reali (collisione fisica osservata). Vedi lo stesso doc sopra.
+- **`DEPOSITO`/`RISERVA1`/`RISERVA2` non sono nodi percorribili dal generatore sintetico (Passo 16).** Sono dedicati alla flotta reale (repair/reserve); il generatore sintetico li esclude sia dallo spawn iniziale sia dal random walk (`kind` in `{"repair","reserve"}`, filtrato in `build_adjacency()`), altrimenti un robot-token normale (nessun guasto) poteva nascerci o finirci per puro caso. Vedi `docs/passi/16-perturbazioni-streaming-live-fix-riserve.md`.
+- **Lo stato di riparazione/riserva della flotta reale è per-run, non per processo (Passo 16).** `dispatchedReserves`/`inRepair`/`decommissioned` (`fleetStateStore.js`) sono resettati esplicitamente a ogni `POST /sim/start`: senza reset, una riserva già usata (o un robot decommissionato) in un run precedente restava inutilizzabile per sempre anche dopo un riavvio pulito della simulazione ROS/Gazebo. Vedi lo stesso doc sopra.
 
 ## Stack
 
@@ -40,6 +44,7 @@ Messaggio di telemetria (JSON, un tick per robot):
 {
   "ts": 1721400000000,
   "robot_id": "R3",
+  "run_id": "a1b2c3d4",
   "x": 12.4, "y": 3.1, "theta": 1.57,
   "v_lin": 0.22, "v_ang": 0.0,
   "cmd_v_lin": 0.25, "cmd_v_ang": 0.0,
@@ -51,15 +56,19 @@ Messaggio di telemetria (JSON, un tick per robot):
 }
 ```
 
+`run_id` (Passo 15): id della sessione/run corrente (generatore sintetico o avvio della flotta reale), nullable per compatibilità con dati storici precedenti al campo. Isola l'analisi (previsione, query TAG, eval) fra run diversi — `robot_id` da solo non basta, i robot-token del generatore lo riusano a ogni run.
+
 `task_state` in { idle, moving, blocked, charging }.
 Origine campi: posa/velocità/odometria/`min_obstacle_dist` da Gazebo; canali di salute sintetizzati nel ponte.
 
-Mappa a grafo (`config/warehouse_graph.json`): `nodes` (id, x, y, kind), `edges` (id, from, to, capacity, length); `capacity=1` = corsia singola. I robot la seguono come roadmap; (x,y) mappato sull'arco occupato (`current_edge`).
+Mappa a grafo (`config/warehouse_graph.json`): `nodes` (id, x, y, kind), `edges` (id, from, to, capacity, length); `capacity=1` = corsia singola. I robot la seguono come roadmap; (x,y) mappato sull'arco occupato (`current_edge`). Include (Passo 15) `DEPOSITO`/`RISERVA1`/`RISERVA2`, fuori dai corridoi principali, per repair_node/reserve_node/gli start_node dei robot di riserva.
 
-Storage (directory Parquet): `telemetry/`, `anomalies/`, `injected_faults/`, `predictions/` — sottocartelle di un volume Docker condiviso (`/data`), non del repo.
+Storage (directory Parquet): `telemetry/`, `anomalies/`, `injected_faults/`, `predictions/` — sottocartelle di un volume Docker condiviso (`/data`), non del repo. `anomalies` partizionata per `type`; `run_id` (Passo 15) è una colonna normale ovunque, filtrata via `WHERE`, non una chiave di partizione (aggiungerla come partizione romperebbe la lettura dello storico preesistente, scritto con uno schema di partizione diverso — verificato).
 
-Guasti di salute (firme parametriche): `deriva_termica` (rampa+plateau), `spike_corrente` (picco), `batteria_collasso` (discesa ripida), `sensore_bloccato` (freeze).
+Guasti di salute (firme parametriche): `deriva_termica` (rampa+plateau), `spike_corrente` (picco), `batteria_collasso` (discesa ripida), `sensore_bloccato` (freeze), `preavviso_intermittente` (Passo 15: raffiche saltuarie oltre una soglia morbida, non un guasto pieno continuo — segnale per la previsione live in streaming).
 Guasti comportamentali (scenari su corridoi + task): `deadlock`, `livelock`.
+Anomalie di tipo `previsione` (Passo 15): non un guasto iniettato, un segnale calcolato in streaming (`detection_job.py`) quando un canale supera una soglia morbida abbastanza spesso da suggerire un guasto imminente — stesso topic `anomalies`, `type="previsione"`.
+Perturbazioni (Passo 16): `rumore_sensore` — rumore gaussiano extra su un canale, **non un guasto**: iniettabile in modo reattivo come i guasti (stessa via `POST /api/fleet-control/fault`), ma deliberatamente esclusa da `injected_faults` (ground truth), cosi' un'eventuale anomalia "salute" rilevata durante la sua finestra resta un falso positivo per `offline/adaptive_thresholds.py`, non un vero positivo — serve a generare falsi positivi controllati per verificare che il sistema li impari a filtrare.
 
 ## Struttura del repo
 

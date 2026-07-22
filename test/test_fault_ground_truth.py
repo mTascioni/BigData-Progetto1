@@ -35,8 +35,7 @@ def test_spike_corrente_ground_truth_precisa():
     assert 3.0 <= real_duration_s <= 7.0, f"durata reale del guasto fuori tolleranza: {real_duration_s}s"
     assert event["start_ts"] >= start_ts_before
 
-    # parametri della firma: devono essere quelli di default (Passo 6/12),
-    # non vuoti o inventati
+    # parametri della firma: devono essere quelli di default, non vuoti o inventati
     assert event["params"]["peak_a"] == 4.5
     assert event["params"]["rise_time_s"] == 5
 

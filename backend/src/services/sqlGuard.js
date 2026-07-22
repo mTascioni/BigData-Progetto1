@@ -1,7 +1,7 @@
-// Guardie sull'SQL generato dal LLM (Passo 10, PLAN.md: "Guardia: solo
-// SELECT + retry sull'errore"). Il retry vero e proprio (ri-prompt col
-// messaggio di errore) e' orchestrato da tagService.js; qui solo la
-// validazione statica prima di eseguire qualunque cosa su Spark SQL.
+// Guardie sull'SQL generato dal LLM: solo SELECT, retry sull'errore. Il
+// retry vero e proprio (ri-prompt col messaggio di errore) e' orchestrato
+// da tagService.js; qui solo la validazione statica prima di eseguire
+// qualunque cosa su Spark SQL.
 
 const FORBIDDEN_KEYWORDS = [
   "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE",
