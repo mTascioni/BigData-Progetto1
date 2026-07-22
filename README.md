@@ -43,8 +43,8 @@ docker compose up -d
 
 | Cosa | URL |
 |---|---|
-| **Dashboard** (vista live flotta + query NL + pannello esperimenti) | http://localhost:3000 |
-| Gazebo via noVNC (vista live di Gazebo) | http://localhost:6080/vnc.html 
+| **Dashboard** | http://localhost:3000 |
+| Vista live di Gazebo con noVNC | http://localhost:6080/vnc.html 
 
 ## Esperimenti
 
@@ -58,5 +58,22 @@ I risultati (CSV) vengono salvati in `/data/eval/` sul volume condiviso.
 
 ```bash
 docker compose down       # ferma e rimuove i container (i dati persistiti su /data restano nel volume shf-data)
+```
+
+## Struttura del progetto
+
+- `ros/` — ROS1 Noetic + Gazebo + TurtleBot3. `catkin_ws/src/shf_bringup/scripts/`: `kafka_bridge.py` (ROS → Kafka), `graph_navigator.py` (movimento sul grafo), `fleet_control_service.py` (HTTP per avvio simulazione/guasti live). `launch/`, `worlds/`, `config/`: lancio multi-robot, mappa Gazebo, parametri navigazione. `bags/`: eventuali registrazioni ROS bag.
+- `streaming/` — job Spark Structured Streaming: `detection_job.py` (real-time: salute, deadlock, livelock, previsione), `persistence_job.py` (batch → Parquet), `query_service.py` (Spark SQL per il layer TAG), `schemas.py`, `isolation_forest_model.py`/`train_isolation_forest.py`/`models/`.
+- `generator/` — simulazione sintetica alternativa a ROS/Gazebo: `synthetic_generator.py` + `generator_service.py` (controllo HTTP).
+- `predictive/` — `forecast_failures.py`: previsione offline (regressione lineare) dei guasti.
+- `offline/` — `adaptive_thresholds.py`: ricalibrazione delle soglie di salute sullo storico.
+- `eval/` — suite di valutazione sperimentale: `run_effectiveness.py`/`run_efficiency.py`, `eval_service.py`, `common.py`, `reference_questions.py`.
+- `test/` — suite pytest (23 test) di correttezza, indipendente da `eval/`.
+- `backend/` — Node.js/Express: `src/routes/`, `src/services/` (Kafka, layer TAG, guardia SQL, stato flotta), `src/config/` (credenziali Hugging Face).
+- `dashboard/` — frontend: `index.html`, `app.js`, `style.css` — nessun framework.
+- `spark/` — Dockerfile dell'immagine Spark (master + worker).
+- `config/` — `warehouse_graph.json`, `experiment.json`, `presets/`.
+- Radice — `docker-compose.yml`, questo `README.md`.
+
 docker compose down -v    # come sopra, ma cancella anche i volumi (Kafka, storico Parquet, cache Ivy) — riparte da zero
 ```
