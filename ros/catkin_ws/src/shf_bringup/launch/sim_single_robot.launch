@@ -9,8 +9,7 @@
   <arg name="kafka_bootstrap" default="kafka:9092"/>
   <arg name="publish_hz" default="2.0"/>
 
-  <!-- Gazebo headless -->
-  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <include file="$(find gazebo_ros)/launch/empty_world.launch">
     <arg name="world_name" value="$(find turtlebot3_gazebo)/worlds/empty.world"/>
     <arg name="paused" value="false"/>
     <arg name="use_sim_time" value="true"/>
@@ -19,27 +18,23 @@
     <arg name="debug" value="false"/>
   </include>
 
-  <!-- robot_description + robot_state_publisher (tf del robot) -->
-  <include file="$(find turtlebot3_bringup)/launch/turtlebot3_remote.launch">
+    <include file="$(find turtlebot3_bringup)/launch/turtlebot3_remote.launch">
     <arg name="model" value="$(arg model)"/>
   </include>
 
   <node pkg="gazebo_ros" type="spawn_model" name="spawn_urdf"
         args="-urdf -model turtlebot3_$(arg model) -x $(arg x_pos) -y $(arg y_pos) -z $(arg z_pos) -param robot_description" />
 
-  <!-- move_base senza mappa statica: il grafo del magazzino e' il roadmap -->
-  <include file="$(find shf_bringup)/launch/move_base_no_map.launch">
+    <include file="$(find shf_bringup)/launch/move_base_no_map.launch">
     <arg name="model" value="$(arg model)"/>
   </include>
 
-  <!-- naviga il grafo nodo per nodo secondo config/experiment.json -->
-  <node pkg="shf_bringup" type="graph_navigator.py" name="graph_navigator" output="screen">
+    <node pkg="shf_bringup" type="graph_navigator.py" name="graph_navigator" output="screen">
     <param name="robot_id" value="$(arg robot_id)"/>
     <param name="config_dir" value="$(arg config_dir)"/>
   </node>
 
-  <!-- ROS -> Kafka: telemetria nello schema condiviso -->
-  <node pkg="shf_bringup" type="kafka_bridge.py" name="kafka_bridge" output="screen">
+    <node pkg="shf_bringup" type="kafka_bridge.py" name="kafka_bridge" output="screen">
     <param name="robot_id" value="$(arg robot_id)"/>
     <param name="config_dir" value="$(arg config_dir)"/>
     <param name="kafka_bootstrap" value="$(arg kafka_bootstrap)"/>

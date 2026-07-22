@@ -42,17 +42,10 @@ export function dispatchMission(robotId, sourceRobotId) {
   return call("/robot/dispatch-mission", { robot_id: robotId, source_robot_id: sourceRobotId });
 }
 
-// Guasto persistente reale (soglia dura confermata, non una previsione) --
-// il robot si ferma dov'e' invece di essere mandato in riparazione
-// automaticamente, in attesa che l'operatore lo veda e decida (rimetterlo
-// in servizio non ha senso finche' il guasto e' vero e attivo: l'unica
-// azione sensata e' toglierlo dalla flotta, vedi decommissionRobot).
 export function freezeRobot(robotId) {
   return call("/robot/freeze", { robot_id: robotId });
 }
 
-// La simulazione ROS/Gazebo non parte in automatico, la dashboard la
-// avvia/ferma scegliendo la scala.
 export function startSim(scale) {
   return call("/sim/start", { scale });
 }

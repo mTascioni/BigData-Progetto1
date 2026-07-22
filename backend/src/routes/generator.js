@@ -8,9 +8,6 @@ const router = Router();
 router.post("/start", async (req, res) => {
   try {
     const result = await startRun(req.body || {});
-    // Un nuovo run parte "pulito" in dashboard: i robot-token del run
-    // precedente (se presente) spariscono subito invece di restare a
-    // schermo fino allo scadere naturale di 15s (pruneStale).
     pruneSynthetic();
     res.json(result);
   } catch (err) {

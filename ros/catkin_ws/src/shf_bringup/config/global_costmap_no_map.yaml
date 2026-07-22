@@ -9,10 +9,6 @@ global_costmap:
   static_map: false
   rolling_window: false
 
-  # copre l'intera bounding box di config/warehouse_graph.json (x: 0-30, y: -10/10)
-  # con un margine, dato che qui non c'e' una mappa statica: nessuna SLAM/AMCL in
-  # questo passo, il grafo e' un roadmap logico e il robot si fida della propria
-  # odometria (accurata in simulazione).
   width: 60
   height: 40
   origin_x: -15.0

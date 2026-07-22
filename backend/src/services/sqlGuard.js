@@ -1,7 +1,3 @@
-// Guardie sull'SQL generato dal LLM: solo SELECT, retry sull'errore. Il
-// retry vero e proprio (ri-prompt col messaggio di errore) e' orchestrato
-// da tagService.js; qui solo la validazione statica prima di eseguire
-// qualunque cosa su Spark SQL.
 
 const FORBIDDEN_KEYWORDS = [
   "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE",
@@ -10,8 +6,6 @@ const FORBIDDEN_KEYWORDS = [
 
 export function extractSql(rawResponse) {
   let sql = rawResponse.trim();
-  // il modello a volte incapsula comunque la risposta in un blocco markdown
-  // nonostante l'istruzione di non farlo: lo togliamo se presente.
   const fenced = sql.match(/```(?:sql)?\s*([\s\S]*?)```/i);
   if (fenced) {
     sql = fenced[1].trim();

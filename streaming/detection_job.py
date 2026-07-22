@@ -1,27 +1,4 @@
 #!/usr/bin/env python3
-"""Job PySpark Structured Streaming di detection real-time.
-
-Consuma il topic Kafka `telemetry`. Tre meccanismi di detection, tre
-query streaming indipendenti sulla stessa sorgente:
-
-- **Salute** (per messaggio): soglie statiche + Isolation Forest
-  (streaming/isolation_forest_model.py) sul vettore
-  (motor_temp, motor_current, battery_pct, v_lin, min_obstacle_dist).
-  Scrive ogni tick su `fleet_state` (stato live per la dashboard) e, se
-  anomalo, anche su `anomalies`.
-- **Livelock** (stato esplicito per robot_id, `applyInPandasWithState`): il
-  robot e' `moving` ma la distanza sul grafo dal `goal_node` non cala per
-  almeno LIVELOCK_CONFIRM_DURATION_S secondi *consecutivi* -- non un
-  singolo campionamento, per non scambiare una sosta transitoria (es. un
-  sorpasso in un corridoio a corsia singola) per uno stallo prolungato.
-- **Deadlock** (finestra scorrevole per current_edge): >=2 robot distinti
-  `blocked` sullo stesso arco nella stessa finestra.
-
-Le finestre livelock/deadlock riusano `task_state`/`current_edge` gia'
-calcolati dal nodo-ponte; la "distanza sul grafo dal goal_node" e'
-calcolata qui con Floyd-Warshall sul piccolo grafo del magazzino
-(config/warehouse_graph.json), broadcastata una volta sola.
-"""
 import json
 import math
 import os
@@ -37,15 +14,13 @@ from pyspark.sql.types import (
 )
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from isolation_forest_model import FEATURES, load_or_train_model  # noqa: E402
-from schemas import TELEMETRY_SCHEMA  # noqa: E402
+from isolation_forest_model import FEATURES, load_or_train_model
+from schemas import TELEMETRY_SCHEMA
 
 KAFKA_BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP", "kafka:9092")
 CONFIG_DIR = os.environ.get("CONFIG_DIR", "/workspace/config")
 MODEL_PATH = os.environ.get("MODEL_PATH", os.path.join(os.path.dirname(__file__), "models", "isolation_forest.pkl"))
 CHECKPOINT_DIR = os.environ.get("CHECKPOINT_DIR", "/tmp/shf-checkpoints")
-# Se presente, sovrascrive le soglie di default -- prodotto da
-# offline/adaptive_thresholds.py, il feedback verso lo streaming.
 ADAPTIVE_THRESHOLDS_PATH = os.environ.get("ADAPTIVE_THRESHOLDS_PATH", "/data/adaptive_thresholds.json")
 
 DEFAULT_THRESHOLDS = {
@@ -54,11 +29,7 @@ DEFAULT_THRESHOLDS = {
     "battery_low_threshold_pct": 20.0,
 }
 
-
 def load_thresholds(path):
-    """Soglie di salute: quelle adattive se disponibili (calibrate sullo
-    storico reale per ridurre i falsi positivi), altrimenti i default
-    fissati a mano qui sopra."""
     try:
         with open(path) as f:
             adaptive = json.load(f)
@@ -68,42 +39,16 @@ def load_thresholds(path):
     except (FileNotFoundError, json.JSONDecodeError):
         return dict(DEFAULT_THRESHOLDS), False
 
-
-# Un singolo campionamento senza progresso puo' essere una sosta del tutto
-# normale -- es. un robot che si accoda dietro un altro su un corridoio a
-# corsia singola e lo supera correttamente poco dopo -- non un vero
-# livelock (che per definizione e' uno stallo *prolungato*, non un singolo
-# istante). Si traccia quindi lo stato per-robot (vedi make_livelock_state_func
-# piu' sotto): ogni LIVELOCK_CHECK_INTERVAL_S secondi di event time si
-# ricampiona dist_to_goal rispetto all'ultimo checkpoint; se il progresso e'
-# sotto soglia si accumula lo stallo, altrimenti si azzera. L'anomalia
-# scatta solo quando lo stallo continua per almeno
-# LIVELOCK_CONFIRM_DURATION_S secondi *consecutivi* (costo: fino a un
-# minuto di latenza in piu' prima dell'alert, a fronte di molti meno falsi
-# positivi su sorpassi/code transitorie).
-#
-# (Nota tecnica: la prima versione di questo fix incatenava due
-# aggregazioni a finestra con watermark separati -- si e' rivelata un bug/
-# limite di Spark: il watermark del secondo stadio restava bloccato
-# all'epoch anche con dati reali in arrivo, quindi la conferma non
-# scattava mai. `applyInPandasWithState` usa un solo operatore stateful e
-# non ha questo problema.)
-LIVELOCK_MIN_PROGRESS_M = 0.5  # sotto questa soglia, "la distanza non e' calata"
+LIVELOCK_MIN_PROGRESS_M = 0.5
 LIVELOCK_CHECK_INTERVAL_S = 10.0
 LIVELOCK_CONFIRM_DURATION_S = 60.0
-LIVELOCK_STATE_TIMEOUT_S = 90.0  # oltre questo senza messaggi, lo stato del robot si scarta
+LIVELOCK_STATE_TIMEOUT_S = 90.0
 
 LIVELOCK_STATE_SCHEMA = StructType([
     StructField("ref_dist", DoubleType()),
     StructField("ref_time_ms", LongType()),
-    StructField("stall_start_ms", LongType()),  # -1 = nessuno stallo in corso
+    StructField("stall_start_ms", LongType()),
     StructField("alerted", BooleanType()),
-    # goal_node del campionamento di riferimento (fix falsi positivi, vedi
-    # sotto): senza, un cambio di goal fra due campionamenti fa sembrare
-    # "nessun progresso" (o un arretramento) anche se il robot si e' mosso
-    # normalmente -- osservato soprattutto sul generatore sintetico, che
-    # assegna un nuovo goal_node a caso ogni volta che un robot arriva,
-    # molto piu' spesso di un robot ROS reale (sequenza fissa e finita).
     StructField("ref_goal_node", StringType()),
 ])
 
@@ -119,11 +64,7 @@ LIVELOCK_OUTPUT_SCHEMA = StructType([
     StructField("n_msgs", IntegerType()),
 ])
 
-
 def _livelock_state_func(key, pdf_iter, state):
-    """Una chiamata per robot_id per micro-batch: pdf_iter sono i nuovi
-    messaggi di telemetria arrivati per quel robot in questo batch. Lo
-    stato persiste fra i batch (vedi LIVELOCK_STATE_SCHEMA)."""
     (robot_id,) = key
     pdf = pd.concat(pdf_iter, ignore_index=True)
 
@@ -152,12 +93,6 @@ def _livelock_state_func(key, pdf_iter, state):
         run_id = getattr(row, "run_id", None) or run_id
         if d is None:
             continue
-        # Il goal e' cambiato dal campionamento di riferimento: la distanza
-        # verso un nuovo obiettivo non e' confrontabile con quella verso il
-        # vecchio (quasi raggiunto), sembrerebbe un arretramento anche se il
-        # robot si muove normalmente. Si tratta come un nuovo riferimento,
-        # nessun calcolo di progresso in questo giro -- stesso trattamento
-        # del primissimo messaggio mai visto per questo robot.
         if ref_time_ms is None or row.goal_node != ref_goal_node:
             ref_dist, ref_time_ms, ref_goal_node = d, t_ms, row.goal_node
             continue
@@ -197,44 +132,21 @@ def _livelock_state_func(key, pdf_iter, state):
 
 DEADLOCK_WINDOW, DEADLOCK_SLIDE = "20 seconds", "10 seconds"
 
-# ---------------------------------------------------------------- previsione
-# Un preavviso (guasto "preavviso_intermittente", vedi kafka_bridge.py
-# /synthetic_generator.py) porta un canale oltre una soglia "morbida" solo a
-# raffiche saltuarie, non in modo continuo come i guasti "duri" gia'
-# esistenti -- l'anomalia non e' ancora rilevabile a soglia fissa (il valore
-# torna nominale fra una raffica e l'altra) ma il PATTERN delle raffiche e'
-# un indicatore che il robot si sta avvicinando a un guasto vero. Si conta,
-# per canale e per robot, quante volte il valore ha superato la soglia
-# morbida negli ultimi PREAVVISO_WINDOW_S secondi (event time); se il numero
-# di raffiche osservate supera PREAVVISO_MIN_CROSSINGS si emette una
-# previsione. Stesso operatore stateful del livelock (applyInPandasWithState),
-# stesso motivo: serve memoria fra i micro-batch, non solo il messaggio
-# corrente.
-#
-# La soglia morbida e' derivata da quella dura con un margine fisso (non
-# un'altra calibrazione a parte): abbastanza per intercettare l'escursione di
-# una raffica senza scattare sul rumore nominale (vedi DEFAULT_THRESHOLDS).
 PREAVVISO_SOFT_MARGIN = {
-    "motor_temp": -10.0,      # soglia dura - 10 (es. 55 -> 45)
-    "motor_current": -0.5,    # soglia dura - 0.5 (es. 2.5 -> 2.0)
-    "battery_pct": 10.0,      # soglia dura + 10 (es. 20 -> 30, "sotto" e' il guasto)
+    "motor_temp": -10.0,
+    "motor_current": -0.5,
+    "battery_pct": 10.0,
 }
 PREAVVISO_DIRECTION = {"motor_temp": "above", "motor_current": "above", "battery_pct": "below"}
 PREAVVISO_WINDOW_S = 60.0
-PREAVVISO_MIN_CROSSINGS = 3  # almeno 3 raffiche osservate nella finestra per confermare un trend, non rumore isolato
+PREAVVISO_MIN_CROSSINGS = 3
 PREAVVISO_STATE_TIMEOUT_S = 90.0
-# Stima conservativa del lead time riportata all'utente (non una regressione
-# vera come in predictive/forecast_failures.py -- qui il segnale e' a
-# raffiche, non un trend continuo adatto a un fit lineare stabile): il tempo
-# restante prima che il guasto pieno "confermi" e' assunto pari alla finestra
-# di osservazione stessa, un limite superiore prudente, non una previsione di
-# precisione.
 PREAVVISO_LEAD_TIME_ESTIMATE_S = PREAVVISO_WINDOW_S
 
 PREAVVISO_CHANNELS = ["motor_temp", "motor_current", "battery_pct"]
 
 PREAVVISO_STATE_SCHEMA = StructType([
-    StructField("crossings_ms", ArrayType(ArrayType(LongType()))),  # una lista di timestamp per canale, stesso ordine di PREAVVISO_CHANNELS
+    StructField("crossings_ms", ArrayType(ArrayType(LongType()))),
     StructField("alerted_channels", ArrayType(StringType())),
 ])
 
@@ -248,7 +160,6 @@ PREAVVISO_OUTPUT_SCHEMA = StructType([
     StructField("lead_time_s", DoubleType()),
     StructField("n_crossings", IntegerType()),
 ])
-
 
 def make_previsione_state_func(hard_thresholds):
     soft_thresholds = {
@@ -311,9 +222,6 @@ def make_previsione_state_func(hard_thresholds):
                     })
                     alerted_channels.append(channel)
                 elif n == 0 and channel in alerted_channels:
-                    # tornato stabilmente nominale (nessuna raffica nella
-                    # finestra): si permette una nuova previsione in futuro
-                    # se le raffiche riprendono.
                     alerted_channels.remove(channel)
 
         state.update((crossings_ms, alerted_channels))
@@ -325,17 +233,13 @@ def make_previsione_state_func(hard_thresholds):
 
     return _fn
 
-
 def load_graph(config_dir):
     with open(os.path.join(config_dir, "warehouse_graph.json")) as f:
         graph = json.load(f)
     node_pos = {n["id"]: (n["x"], n["y"]) for n in graph["nodes"]}
     return node_pos, graph["edges"]
 
-
 def all_pairs_shortest_path(node_pos, edges):
-    """Floyd-Warshall: grafo piccolo (~10 nodi), il costo O(n^3) e'
-    trascurabile e si calcola una volta sola all'avvio del job."""
     nodes = list(node_pos.keys())
     INF = float("inf")
     dist = {a: {b: (0.0 if a == b else INF) for b in nodes} for a in nodes}
@@ -352,25 +256,10 @@ def all_pairs_shortest_path(node_pos, edges):
                     dist[i][j] = via
     return dist
 
-
 def nearest_node(node_pos, x, y):
     return min(node_pos, key=lambda n: math.hypot(node_pos[n][0] - x, node_pos[n][1] - y))
 
-
 def make_dist_to_goal_udf(node_pos_bc, dist_table_bc, edge_lookup_bc):
-    """Distanza continua sul grafo dal punto attuale al goal_node: proietta
-    (x, y) sull'arco corrente (`current_edge`, gia' nello schema) per sapere
-    quanto manca a ciascuno dei due nodi estremi, poi somma la distanza-su-
-    grafo (Floyd-Warshall) da quel nodo al goal, e prende il minimo dei due
-    percorsi.
-
-    Necessario perche' un arco da 10m percorso a velocita' di crociera
-    (~0.2 m/s) richiede ~50s: se si agganciasse (x, y) al solo nodo piu'
-    vicino (versione precedente), dist_to_goal resterebbe piatto per circa
-    meta' di quel tempo -- piu' della finestra di 30s del rilevatore di
-    livelock -- facendo scattare falsi positivi su robot che si stanno
-    muovendo normalmente. Verificato con dati reali: vedi
-    docs/passi/07-detection-streaming.md."""
     def _dist(x, y, current_edge, goal_node):
         if goal_node is None or x is None or y is None:
             return None
@@ -379,7 +268,6 @@ def make_dist_to_goal_udf(node_pos_bc, dist_table_bc, edge_lookup_bc):
         edge = edge_lookup_bc.value.get(current_edge)
 
         if edge is None:
-            # arco sconosciuto/mancante: fallback al nodo piu' vicino
             n = nearest_node(node_pos, x, y)
             d = dist_table.get(n, {}).get(goal_node)
             return float(d) if d is not None and d != float("inf") else None
@@ -402,7 +290,6 @@ def make_dist_to_goal_udf(node_pos_bc, dist_table_bc, edge_lookup_bc):
 
     return F.udf(_dist, DoubleType())
 
-
 def make_threshold_reasons_udf(thresholds):
     temp_t = thresholds["motor_temp_threshold_c"]
     current_t = thresholds["motor_current_threshold_a"]
@@ -420,7 +307,6 @@ def make_threshold_reasons_udf(thresholds):
 
     return F.udf(_reasons, ArrayType(StringType()))
 
-
 def make_isolation_forest_udf(model_bc):
     @F.pandas_udf(IntegerType())
     def _predict(motor_temp: pd.Series, motor_current: pd.Series, battery_pct: pd.Series,
@@ -431,32 +317,19 @@ def make_isolation_forest_udf(model_bc):
             "battery_pct": battery_pct, "v_lin": v_lin,
             "min_obstacle_dist": min_obstacle_dist,
         }).fillna({"v_lin": 0.0, "min_obstacle_dist": 3.5})[FEATURES]
-        preds = model.predict(frame)  # -1 = anomalia, 1 = normale
+        preds = model.predict(frame)
         return pd.Series((preds == -1).astype(int))
 
     return _predict
 
-
 def to_kafka(df, topic, key_col=None):
-    # key_col resta ANCHE nel payload (non solo nella key di Kafka): un
-    # consumer che legge solo il value (es. kafka-console-consumer di
-    # default) non deve perdere robot_id.
     out = df.select(F.to_json(F.struct(*df.columns)).alias("value"), *([F.col(key_col).alias("key")] if key_col else []))
     (out.write.format("kafka")
         .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP)
         .option("topic", topic)
         .save())
 
-
 def main():
-    # Il default di Spark (200 partizioni di shuffle) e' pensato per cluster
-    # con decine di core: qui detection_job gira con 2 core totali e i due
-    # shuffle (groupBy per-robot del livelock, groupBy+window del deadlock)
-    # hanno al massimo una manciata di chiavi per micro-batch (un robot_id o
-    # un current_edge per messaggio) -- con 200 partizioni, ogni trigger
-    # schedula ~200 task quasi tutti vuoti invece di ~4, overhead puro che
-    # si somma alla contesa con Gazebo (vedi start-master.sh). Impostato a
-    # un multiplo piccolo di spark.cores.max invece che al default.
     spark = (
         SparkSession.builder.appName("shf-detection")
         .config("spark.sql.shuffle.partitions", "4")
@@ -499,7 +372,6 @@ def main():
         .withColumn("dist_to_goal", dist_to_goal_udf("x", "y", "current_edge", "goal_node"))
     )
 
-    # ---------------------------------------------------------------- salute
     health = (
         telemetry
         .withColumn("if_anomaly", isolation_forest_udf(
@@ -534,7 +406,6 @@ def main():
         .start()
     )
 
-    # -------------------------------------------------------------- livelock
     livelock = (
         telemetry
         .select("robot_id", "run_id", "event_time", "dist_to_goal", "task_state", "goal_node")
@@ -563,7 +434,6 @@ def main():
         .start()
     )
 
-    # -------------------------------------------------------------- deadlock
     deadlock_windowed = (
         telemetry.filter(F.col("task_state") == "blocked")
         .withWatermark("event_time", "20 seconds")
@@ -579,13 +449,12 @@ def main():
     deadlock_query = (
         deadlock_candidates.writeStream
         .foreachBatch(write_anomaly_batch)
-        .outputMode("append")  # stessa motivazione di livelock_query sopra
+        .outputMode("append")
         .option("checkpointLocation", f"{CHECKPOINT_DIR}/deadlock")
         .trigger(processingTime="10 seconds")
         .start()
     )
 
-    # ------------------------------------------------------------ previsione
     previsione_state_func = make_previsione_state_func(thresholds)
     previsione = (
         telemetry
@@ -611,7 +480,6 @@ def main():
 
     _ = (health_query, livelock_query, deadlock_query, previsione_query)
     spark.streams.awaitAnyTermination()
-
 
 if __name__ == "__main__":
     main()

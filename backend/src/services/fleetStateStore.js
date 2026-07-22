@@ -8,17 +8,15 @@ import { dispatchMission, freezeRobot, sendToRepair } from "./fleetControlServic
 
 const KAFKA_BOOTSTRAP = process.env.KAFKA_BOOTSTRAP || "kafka:9092";
 const CONFIG_DIR = process.env.CONFIG_DIR || "/workspace/config";
-const STALE_AFTER_MS = 15000; // oltre questo senza un nuovo fleet_state, il robot e' rimosso
+const STALE_AFTER_MS = 15000;
 const PRUNE_INTERVAL_MS = 5000;
 
 const kafka = new Kafka({ clientId: "shf-backend", brokers: [KAFKA_BOOTSTRAP] });
-// group id univoco per processo: la dashboard vuole sempre lo stato piu'
-// recente, non un replay dell'offset dell'ultimo consumer fermato.
 const consumer = kafka.consumer({ groupId: `shf-backend-dashboard-${Date.now()}` });
 
-const robots = new Map(); // robot_id -> { ...ultimo fleet_state, _receivedAt }
-const updateListeners = new Set(); // callback(robotState)
-const removeListeners = new Set(); // callback(robotId)
+const robots = new Map();
+const updateListeners = new Set();
+const removeListeners = new Set();
 
 export function getSnapshot() {
   return Array.from(robots.values()).map(({ _receivedAt, ...state }) => state);
@@ -34,17 +32,8 @@ export function onRemove(callback) {
   return () => removeListeners.delete(callback);
 }
 
-// Robot reali (flotta ROS, config/experiment.json): id "R" + numero, es. R1.
-// Tutto il resto e' un robot-token del generatore sintetico, qualunque sia
-// il prefisso scelto (default "SIM").
 const REAL_ROBOT_ID_RE = /^R\d+$/;
 
-// Un nuovo run del generatore parte "a video" con lo stato del run
-// precedente ancora in memoria (nessun messaggio esplicito di fine, solo
-// pruneStale() dopo STALE_AFTER_MS): per chi guarda la dashboard sembra che
-// premere "Avvia" non faccia nulla. Il backend lo richiama esplicitamente
-// all'avvio di un nuovo run (routes/generator.js) cosi' i robot-token del
-// run precedente spariscono subito, non dopo 15s.
 export function pruneSynthetic() {
   for (const [robotId] of robots) {
     if (!REAL_ROBOT_ID_RE.test(robotId)) {
@@ -54,13 +43,6 @@ export function pruneSynthetic() {
   }
 }
 
-// Anello automatico di retroazione: un'anomalia di salute reale su un robot
-// reale manda il robot colpito in riparazione e dispaccia un robot di
-// riserva a prendere in carico la sua missione. "Riserva" = un robot reale
-// senza una voce in experiment.json tasks[] (convenzione: R4/R8 in
-// scale=large, vedi sim_multi_robot.launch) *e* effettivamente attivo ora
-// (presente in `robots`) -- cosi' in scale=small (R5-R8 non spawnati) non
-// si prova mai a dispacciare una riserva che non esiste.
 let _experiment = null;
 function loadExperiment() {
   if (!_experiment) {
@@ -73,8 +55,8 @@ function hasOwnMission(robotId) {
   return taskRobotIds.has(robotId);
 }
 
-const dispatchedReserves = new Set(); // riserve gia' usate: non si ridispaccia la stessa due volte (v1, non "tornano" riserva)
-const decommissioned = new Set(); // robot_id tolti dalla flotta dall'operatore: mai piu' scelti come riserva
+const dispatchedReserves = new Set();
+const decommissioned = new Set();
 
 function pickAvailableReserve() {
   const experiment = loadExperiment();
@@ -86,29 +68,18 @@ function pickAvailableReserve() {
       !dispatchedReserves.has(r.robot_id) &&
       !decommissioned.has(r.robot_id) &&
       robots.has(r.robot_id) &&
-      // una riserva guasta (anomalia gia' rilevata, in riparazione o
-      // comunque segnalata da fleet_state) non va mai scelta come
-      // sostituto.
       !inRepair.has(r.robot_id) &&
       !robots.get(r.robot_id)?.health_anomaly
   );
   return candidate ? candidate.robot_id : null;
 }
 
-const inRepair = new Set(); // robot_id real gia' inviati in riparazione o congelati (debounce: un guasto reale genera molti eventi mentre e' attivo)
+const inRepair = new Set();
 
 export function clearRepairFlag(robotId) {
   inRepair.delete(robotId);
 }
 
-// Un robot reale "in avaria" (guasto persistente, soglia dura confermata)
-// non va in riparazione automatica -- si ferma dov'e' e aspetta l'operatore,
-// che dalla dashboard puo' decommissionarlo (vedi decommissionRobot piu'
-// sotto). La riparazione + dispaccio riserva automatici sono la reazione a
-// una PREVISIONE (onPrevisioneAnomaly, preavviso intermittente rilevato in
-// streaming), non al guasto vero e proprio: un guasto persistente e' per
-// definizione gia' troppo tardi per una manovra preventiva, l'unica cosa
-// sensata e' fermarsi e segnalare.
 async function onPersistentFailure(event) {
   const robotId = event.robot_id;
   if (!robotId || !REAL_ROBOT_ID_RE.test(robotId)) return;
@@ -123,9 +94,6 @@ async function onPersistentFailure(event) {
   }
 }
 
-// Reazione PREVENTIVA a un preavviso rilevato in streaming (detection_job.py,
-// type="previsione"): il robot non e' ancora rotto, quindi si riusa la
-// stessa logica di riparazione+dispaccio riservata al guasto vero.
 async function onPrevisioneAnomaly(event) {
   const robotId = event.robot_id;
   if (!robotId || !REAL_ROBOT_ID_RE.test(robotId)) return;
@@ -145,19 +113,6 @@ async function onPrevisioneAnomaly(event) {
   }
 }
 
-// Toglie un robot reale "in avaria" dalla flotta su richiesta esplicita
-// dell'operatore (dashboard): sparisce dalla mappa/tabelle (stesso
-// meccanismo onRemove gia' usato da pruneStale/pruneSynthetic) e non viene
-// mai piu' scelto come riserva. Non ferma i processi ROS del suo namespace
-// (nessun controllo per-robot esiste oggi in fleet_control_service.py, v1
-// dichiarata: resta "fermo e invisibile", non "smontato").
-//
-// dispatchedReserves/inRepair/decommissioned vivono per l'intera vita del
-// processo backend, non per singola simulazione -- un nuovo avvio della
-// flotta reale (routes/fleetControl.js, /sim/start) la ripristina in
-// ROS/Gazebo da zero, ma senza un reset esplicito una riserva usata (o un
-// robot decommissionato) in un run precedente resterebbe inutilizzabile
-// anche nei run successivi.
 export function resetRealFleetState() {
   dispatchedReserves.clear();
   inRepair.clear();
@@ -175,10 +130,6 @@ export function decommissionRobot(robotId) {
 onSaluteThresholdAnomaly((event) => onPersistentFailure(event).catch(() => {}));
 onPrevisione((event) => onPrevisioneAnomaly(event).catch(() => {}));
 
-// Un robot del generatore sintetico che finisce un run, o un robot ROS che
-// sparisce, altrimenti resterebbe per sempre come "fantasma" nello stato in
-// memoria -- non c'e' nessun messaggio esplicito di "fine", solo l'assenza
-// di nuovi fleet_state.
 function pruneStale() {
   const cutoff = Date.now() - STALE_AFTER_MS;
   for (const [robotId, entry] of robots) {
@@ -192,9 +143,6 @@ function pruneStale() {
 const RETRY_DELAY_MS = 5000;
 
 export async function start() {
-  // Vedi la stessa nota in anomalyStream.js: all'avvio Kafka puo' non
-  // essere ancora pronto, si ritenta finche' non va a buon fine invece di
-  // restare morto per sempre dopo un solo fallimento.
   for (;;) {
     try {
       await consumer.connect();
@@ -209,11 +157,6 @@ export async function start() {
             return;
           }
           if (!state.robot_id) return;
-          // Un robot decommissionato continua a pubblicare fleet_state (il
-          // nodo ROS non sa nulla della decommission lato dashboard, resta
-          // solo fermo/congelato) -- senza questo controllo il messaggio
-          // successivo lo rimetterebbe subito nella Map, vanificando
-          // decommissionRobot() nel giro di un tick.
           if (decommissioned.has(state.robot_id)) return;
           robots.set(state.robot_id, { ...state, _receivedAt: Date.now() });
           for (const callback of updateListeners) callback(state);

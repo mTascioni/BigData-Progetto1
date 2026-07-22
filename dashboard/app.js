@@ -10,55 +10,31 @@ const TASK_COLORS = {
   charging: "#29b6f6",
 };
 
-const MAX_EXTRAPOLATION_S = 3; // oltre questo, l'ultima posizione nota e' troppo vecchia: si congela
-const ANOMALY_HIGHLIGHT_MS = 8000; // quanto resta evidenziato un evento deadlock/livelock sulla mappa
+const MAX_EXTRAPOLATION_S = 3;
+const ANOMALY_HIGHLIGHT_MS = 8000;
 const MAX_EVENTS_LOG = 15;
 
 let graph = null;
-let transform = null; // (x, y) -> [px, py]
-const robots = new Map(); // robot_id -> ultimo stato ricevuto (con _receivedAt)
+let transform = null;
+const robots = new Map();
 
-// Robot reali (flotta ROS sempre accesa, config/experiment.json: R1, R2, R3)
-// vs robot-token del generatore sintetico (run on-demand, spesso su una
-// topologia diversa da quella reale). Stessa regex del backend
-// (fleetStateStore.js) -- qui serve solo per decidere cosa disegnare dove.
 const REAL_ROBOT_ID_RE = /^R\d+$/;
 
-// La mappa (x, y) -> pixel dipende dalla topologia (preset) disegnata: il
-// grafo reale (ROS/Gazebo) e' sempre "medium", ma il generatore sintetico
-// puo' girare su "small"/"large" (nodi diversi, spesso con gli stessi id
-// ma coordinate diverse). Si tiene un grafo/trasformazione per preset, e si
-// cambia vista quando il run attivo del generatore usa un preset diverso.
-const graphCache = new Map(); // preset -> { graph, transform }
+const graphCache = new Map();
 let activePreset = "medium";
-const deadlockEdges = new Map(); // edge_id -> expiresAt (ms epoch)
-const robotAlerts = new Map(); // robot_id -> { type: 'deadlock'|'livelock', expiresAt }
-const recentEvents = []; // log per il pannello "Eventi recenti", piu' recente in testa
+const deadlockEdges = new Map();
+const robotAlerts = new Map();
+const recentEvents = [];
 
-// Previsioni "live" (type="previsione" dallo streaming, vedi detection_job.py)
-// mostrate subito in "Robot a rischio", non solo le previsioni offline
-// (predictive/forecast_failures.py, batch, rilette ogni 5s da /api/predictions).
-// Chiave (robot_id, channel): una nuova previsione live sullo stesso canale
-// sovrascrive la precedente. TTL perche' il lead_time_s live e' una stima
-// fissa (la finestra di osservazione, non una regressione che si aggiorna da
-// sola): senza scadenza resterebbe visibile anche a robot riparato o trend rientrato.
-const livePredictions = new Map(); // "robot_id:channel" -> { robot_id, channel, current_value, critical_threshold, lead_time_s, _receivedAt }
+const livePredictions = new Map();
 const PREDICTION_LIVE_TTL_MS = 120000;
 
-// Una perturbazione non genera un evento dedicato (e' rumore, non
-// un'anomalia): la teniamo qui lato client, dal momento in cui il form la
-// invia fino alla scadenza della sua durata, cosi' l'operatore vede quale
-// robot la sta subendo in questo momento senza dover controllare i log.
-const activePerturbations = new Map(); // robot_id -> { channel, expiresAt }
+const activePerturbations = new Map();
 
 function markPerturbationActive(robotId, channel, durationS) {
   activePerturbations.set(robotId, { channel, expiresAt: Date.now() + durationS * 1000 });
 }
 
-// Pannello "Streaming live": buffer client-side per topic, mai scritto su
-// disco -- solo l'ultimo MAX_RAW_LOG_LINES messaggi campionati (il backend
-// campiona gia' a monte, vedi rawStream.js) restano in memoria, scartati al
-// refresh della pagina.
 const RAW_STREAM_TOPICS = ["telemetry", "anomalies", "injected_faults", "fleet_state"];
 const MAX_RAW_LOG_LINES = 50;
 const rawStreamBuffers = Object.fromEntries(RAW_STREAM_TOPICS.map((t) => [t, []]));
@@ -76,14 +52,13 @@ function buildTransform(nodes) {
   const h = canvas.height - 2 * PADDING;
   return (x, y) => [
     PADDING + ((x - minX) / spanX) * w,
-    PADDING + (1 - (y - minY) / spanY) * h, // flip y: "su" nel grafo = su a schermo
+    PADDING + (1 - (y - minY) / spanY) * h,
   ];
 }
 
 function drawGraph(now) {
   if (!graph) return;
   const nodeById = Object.fromEntries(graph.nodes.map((n) => [n.id, n]));
-  // pulsazione lieve per gli archi in deadlock, cosi' l'evento si nota a colpo d'occhio
   const pulse = 0.6 + 0.4 * Math.sin(now / 180);
 
   for (const edge of graph.edges) {
@@ -127,10 +102,6 @@ function drawGraph(now) {
   }
 }
 
-// Stima la posizione corrente per dead reckoning: i dati arrivano via
-// websocket al massimo ogni ~2s (trigger del micro-batch di detection_job),
-// ma il messaggio ha gia' v_lin/v_ang/theta, quindi si puo' estrapolare la
-// posizione ad ogni frame invece di "teletrasportare" il robot ogni update.
 function estimatePose(robot, now) {
   const dtRaw = (now - robot._receivedAt) / 1000;
   const dt = Math.max(0, Math.min(dtRaw, MAX_EXTRAPOLATION_S));
@@ -144,10 +115,6 @@ function drawRobots(now) {
   for (const robot of robots.values()) {
     if (robot.x == null || robot.y == null) continue;
     const isReal = REAL_ROBOT_ID_RE.test(robot.robot_id);
-    // Un robot reale esiste solo sul grafo "medium": se la mappa sta
-    // mostrando un altro preset (run del generatore su small/large) le sue
-    // (x, y) non hanno senso su queste linee, quindi non si disegna --
-    // resta comunque visibile nella tabella "Tutti i robot" sotto.
     if (isReal && activePreset !== "medium") continue;
     const pose = estimatePose(robot, now);
     const [x, y] = transform(pose.x, pose.y);
@@ -158,8 +125,6 @@ function drawRobots(now) {
     ctx.fill();
 
     if (!isReal) {
-      // anello tratteggiato: distingue a colpo d'occhio un robot-token del
-      // generatore sintetico da un robot reale ROS/Gazebo.
       ctx.beginPath();
       ctx.arc(x, y, 9, 0, Math.PI * 2);
       ctx.strokeStyle = "#9aa4b2";
@@ -169,8 +134,6 @@ function drawRobots(now) {
       ctx.setLineDash([]);
     }
 
-    // indicatore di direzione: rende visibile la rotazione anche quando la
-    // posizione cambia poco (es. robot fermo su un incrocio che gira)
     const [hx, hy] = transform(
       pose.x + Math.cos(pose.theta) * 0.9,
       pose.y + Math.sin(pose.theta) * 0.9
@@ -212,17 +175,6 @@ function drawRobots(now) {
   }
 }
 
-// buildTransform mappa i nodi esattamente fino al bordo dell'area
-// [PADDING, canvas.width-PADDING]: un nodo sul perimetro del grafo (es. D/G/J
-// sul bordo destro, E/F/G su quello superiore) cade quindi ESATTAMENTE sul
-// confine della zona di clip qui sotto. Tutto cio' che si disegna oltre il
-// punto esatto del nodo -- l'etichetta di testo (offset +8/-8px), l'anello
-// di anomalia (raggio 13px), quello di deadlock/livelock (17px) -- finiva
-// tagliato via dal clip per i nodi perimetrali (il canvas disegnava
-// correttamente, era il clip a troncare).
-// Fix: la zona di clip resta piu' larga di CLIP_MARGIN px per lato rispetto
-// a dove arrivano i nodi, cosi' c'e' spazio per etichette/anelli senza
-// perdere lo scopo originale del clip (nascondere robot fuori griglia).
 const CLIP_MARGIN = 20;
 
 function render() {
@@ -261,24 +213,18 @@ async function loadGraph() {
   await setActivePreset("medium");
 }
 
-// Aggiorna la scritta sopra la mappa: quale topologia e' disegnata e quanti
-// robot reali/sintetici sono attualmente visibili -- risponde direttamente
-// a "di quale simulazione sto vedendo i risultati?".
 function updateMapBadge() {
   const badge = document.getElementById("map-badge");
   if (!badge) return;
   const all = [...robots.values()];
   const nReal = all.filter((r) => REAL_ROBOT_ID_RE.test(r.robot_id)).length;
   const nSynthetic = all.length - nReal;
-  // run_id isola i dati di run diversi nello storico -- mostrato qui solo
-  // come promemoria di debug (a quale run appartengono i robot visti ora),
-  // preso dal primo robot con un run_id valorizzato.
   const runId = all.find((r) => r.run_id)?.run_id;
   const runSuffix = runId ? ` · run ${runId}` : "";
   if (activePreset === "medium") {
-    badge.textContent = `Vista: grafo reale (medium) — ${nReal} robot reali, ${nSynthetic} sintetici${runSuffix}`;
+    badge.textContent = `Vista: grafo (medium) — ${nReal} robot ROS, ${nSynthetic} sintetici${runSuffix}`;
   } else {
-    badge.textContent = `Vista: preset "${activePreset}" (generatore) — robot reali nascosti (grafo diverso), ${nSynthetic} sintetici${runSuffix}`;
+    badge.textContent = `Vista: preset "${activePreset}" (generatore) — robot ROS, ${nSynthetic} sintetici${runSuffix}`;
   }
 }
 
@@ -414,14 +360,8 @@ async function refreshPredictions() {
     const data = await res.json();
     offlineRows = data.rows || [];
   } catch {
-    // le previsioni offline potrebbero non essere disponibili (es. nessun
-    // run di predictive/forecast_failures.py ancora eseguito): quelle live
-    // restano comunque valide, non si azzera tutto.
   }
 
-  // Le previsioni live (streaming, appena rilevate) hanno sempre la
-  // precedenza su quelle offline per la stessa coppia (robot_id, channel):
-  // sono piu' fresche del batch, che gira on-demand ogni tot minuti.
   const merged = new Map();
   for (const row of offlineRows) merged.set(`${row.robot_id}:${row.channel}`, row);
   for (const [key, live] of livePredictions) merged.set(key, live);
@@ -462,9 +402,6 @@ function renderTagResult(result) {
   const body = rows
     .map((row) => `<tr>${columns.map((c) => `<td>${row[c] ?? ""}</td>`).join("")}</tr>`)
     .join("");
-  // Stadio di answer synthesis (layer TAG completo, non solo text-to-SQL):
-  // se la sintesi e' fallita (es. rate limit HF) result.answer e' null,
-  // restano comunque SQL e righe grezze -- degrado educato, non un errore.
   const answerHtml = result.answer
     ? `<p class="tag-answer">${escapeHtml(result.answer)}</p>`
     : `<p class="hint">(risposta in linguaggio naturale non disponibile per questo run -- vedi righe sotto)</p>`;
@@ -505,7 +442,7 @@ function setupTagForm() {
 function renderFleetTable() {
   const tbody = document.querySelector("#fleet-table tbody");
   const rows = [...robots.values()].sort((a, b) => a.robot_id.localeCompare(b.robot_id));
-  const FLEET_TABLE_ROW_LIMIT = 200; // migliaia di robot-token del generatore intaserebbero il DOM
+  const FLEET_TABLE_ROW_LIMIT = 200;
   const shown = rows.slice(0, FLEET_TABLE_ROW_LIMIT);
   const now = Date.now();
   tbody.innerHTML = shown
@@ -535,9 +472,6 @@ function renderFleetTable() {
   }
 }
 
-// Pannello di controllo della flotta reale (ROS/Gazebo). repairNode e
-// reserveNode arrivano da /api/fleet-control/config (letti da
-// config/experiment.json lato backend), non sono hardcoded qui.
 let realFleetConfig = { repair_node: null, reserve_node: null, reserve_robot_ids: [] };
 
 async function loadRealFleetConfig() {
@@ -545,22 +479,13 @@ async function loadRealFleetConfig() {
     const res = await fetch("/api/fleet-control/config");
     realFleetConfig = await res.json();
   } catch {
-    // pannello disabilitato in pratica (status sempre "in servizio") se non disponibile
   }
 }
 
 function realRobotStatus(robot) {
   if (robot.goal_node && robot.goal_node === realFleetConfig.repair_node) return "in riparazione (preventiva)";
   if (robot.goal_node && robot.goal_node === realFleetConfig.reserve_node) return "di riserva (rientrato)";
-  // Un'anomalia di salute su soglia dura ferma il robot dov'e' (non lo manda
-  // in automatico a repair_node, vedi fleetStateStore.js::onPersistentFailure)
-  // -- se health_anomaly e' vero e il robot non e' gia' diretto verso
-  // repair_node/reserve_node (i due casi sopra, riservati alla previsione
-  // preventiva), e' un guasto persistente reale in attesa dell'operatore.
   if (robot.health_anomaly) return "in avaria";
-  // una riserva mai ancora dispacciata non ha mai ricevuto un goal (nessun
-  // task all'avvio): goal_node resta vuoto, non c'e' modo di riconoscerla
-  // dal solo goal_node come le altre due condizioni sopra.
   if (!robot.goal_node && realFleetConfig.reserve_robot_ids.includes(robot.robot_id)) return "di riserva";
   return "in servizio";
 }
@@ -613,10 +538,6 @@ function renderRealFleetPanel() {
     });
   });
 
-  // Un robot "in avaria" (guasto persistente, gia' fermato dov'era dal
-  // backend) puo' essere tolto dalla flotta dall'operatore -- sparisce da
-  // mappa/tabelle non appena il backend conferma (stesso meccanismo
-  // websocket "remove" gia' usato per i robot-token del generatore).
   tbody.querySelectorAll(".real-decommission-btn").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const robotId = btn.dataset.robot;
@@ -636,9 +557,6 @@ function renderRealFleetPanel() {
   });
 }
 
-// La simulazione ROS/Gazebo non parte in automatico -- la dashboard la
-// avvia/ferma scegliendo la scala, stesso pattern start/stop del pannello
-// del generatore sintetico piu' sotto.
 async function refreshSimStatus() {
   const startBtn = document.getElementById("sim-start-btn");
   const stopBtn = document.getElementById("sim-stop-btn");
@@ -692,11 +610,6 @@ function setupSimControls() {
   });
 }
 
-// Card "Avvia simulazione": un solo posto per scegliere fra flotta reale
-// (ROS/Gazebo) e generatore sintetico, invece di due pannelli separati in
-// giro per la pagina -- switch puramente visivo, nessuno dei due form viene
-// distrutto (restano gli stessi #sim-control-form/#generator-form di prima,
-// polling e stato continuano a girare anche sul tab non visibile).
 function setupSimTabs() {
   const buttons = document.querySelectorAll("#sim-tabs .tab-btn");
   const panels = {
@@ -774,14 +687,11 @@ function setupRealPerturbationForm() {
   });
 }
 
-// Oltre questo numero di robot il menu a tendina diventa poco pratico
-// (migliaia di <option>, sweep di scala): oltre la soglia si resta su
-// "casuale", che e' comunque la scelta giusta per quei test.
 const FAULT_ROBOT_SELECT_LIMIT = 500;
 
 function faultRobotOptionsHtml() {
   const numRobots = Number(document.getElementById("gen-num-robots").value) || 0;
-  const prefix = "SIM"; // stesso default di robot_id_prefix lato generatore
+  const prefix = "SIM";
   let options = `<option value="random">casuale</option>`;
   if (numRobots > 0 && numRobots <= FAULT_ROBOT_SELECT_LIMIT) {
     for (let i = 0; i < numRobots; i++) {
@@ -794,9 +704,6 @@ function faultRobotOptionsHtml() {
   return options;
 }
 
-// Il numero di robot puo' cambiare dopo che una riga guasto e' gia' stata
-// aggiunta: si rigenerano le opzioni di tutte le righe esistenti, provando a
-// mantenere la selezione corrente se ancora valida.
 function refreshFaultRobotOptions() {
   const html = faultRobotOptionsHtml();
   document.querySelectorAll("#gen-faults-list .fault-robot").forEach((select) => {
@@ -836,9 +743,6 @@ function collectFaults() {
   }));
 }
 
-// Le due select di iniezione live (guasto/perturbazione) elencano i robot
-// del run ATTIVO (dal suo config, non dal campo "Numero robot", che nel
-// frattempo puo' essere gia' stato cambiato in vista del run successivo).
 function populateLiveInjectRobotOptions(config) {
   const prefix = config.robot_id_prefix || "SIM";
   const numRobots = Number(config.num_robots) || 0;
@@ -869,9 +773,6 @@ async function refreshGenStatus() {
     stopBtn.disabled = !s.running;
     setGenLiveInjectEnabled(!!s.running);
     if (s.running && s.config) populateLiveInjectRobotOptions(s.config);
-    // La mappa segue il preset del run attivo; a run finito/fermo torna al
-    // grafo reale (medium), che e' la vista di default quando non si sta
-    // facendo un esperimento di carico.
     const desiredPreset = s.running && s.config ? s.config.graph_preset || "medium" : "medium";
     if (desiredPreset !== activePreset) await setActivePreset(desiredPreset);
 
@@ -987,12 +888,6 @@ function setupGenLiveInjectionForms() {
   });
 }
 
-// Gli script eval/*.py non scrivono PNG (restano CSV/JSON, letti a valle
-// per il PDF se serve). La dashboard avvia il run on-demand
-// (POST /api/eval/run) e ne segue
-// l'avanzamento via polling di GET /api/eval/status: eval_service.py
-// pubblica il risultato di ogni sotto-esperimento appena e' pronto, cosi'
-// qui si vedono comparire uno alla volta, non solo a run completato.
 const EVAL_CSV_FILES = {
   effectiveness: [
     "detection_robots.csv", "detection_summary.csv", "prediction_accuracy.csv",
@@ -1133,7 +1028,7 @@ function pollEvalRun(runType) {
     try {
       const res = await fetch("/api/eval/status");
       const status = await res.json();
-      if (status.run_type !== runType) return; // e' in corso l'altro tipo, non tocca questo pannello
+      if (status.run_type !== runType) return;
       renderEvalLive(runType, status);
       if (!status.running) {
         clearInterval(evalPollTimers[runType]);
@@ -1141,7 +1036,6 @@ function pollEvalRun(runType) {
         document.getElementById(`eval-${runType}-run-btn`).disabled = false;
       }
     } catch {
-      // silenzioso, si riprova al prossimo giro
     }
   };
   evalPollTimers[runType] = setInterval(tick, 1000);
@@ -1187,7 +1081,6 @@ async function refreshEvalResults() {
       }
     }
   } catch {
-    // silenzioso: non e' critico per il resto della dashboard, si riprova al prossimo giro
   }
 }
 

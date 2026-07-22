@@ -1,23 +1,4 @@
 #!/usr/bin/env python3
-"""Valutazione sperimentale — efficiency.
-
-Quattro esperimenti:
-1. Sweep di carico crescente col generatore sintetico: throughput
-   raggiunto vs target, fino a trovare il punto di rottura (dove il
-   generatore smette di reggere il ritmo richiesto).
-2. Latenza onset->alert: quanto tempo passa fra l'attivazione reale di un
-   guasto e la comparsa del primo alert di salute, su piu' prove.
-3. Scalabilita': non solo throughput puro (1), ma se la detection resta
-   corretta ENTRE il carico sale (le due cose non sono mai state misurate
-   insieme finora).
-4. Reattivita' del loop di auto-riparazione (flotta reale): latenza fra la
-   previsione rilevata in streaming e la riparazione preventiva
-   effettivamente dispacciata (fleetStateStore.js). Richiede la flotta
-   reale gia' avviata -- se non lo e', l'esperimento viene saltato invece
-   di far fallire l'intero run di efficiency.
-
-Uso: `python3 run_efficiency.py` (dentro il container ros).
-"""
 import csv
 import os
 import sys
@@ -26,13 +7,12 @@ import time
 import requests
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (  # noqa: E402
+from common import (
     BACKEND_URL, collect_messages, load_experiment, new_run_dir,
     start_consumer, start_generator, update_index, wait_generator_done,
 )
 
-BREAKING_POINT_RATIO = 0.8  # sotto questa frazione del target, si considera "rotto"
-
+BREAKING_POINT_RATIO = 0.8
 
 def run_throughput_sweep(run_dir):
     print("== Efficiency: sweep di throughput a carico crescente ==")
@@ -60,7 +40,6 @@ def run_throughput_sweep(run_dir):
 
     achieved = [r["achieved_msgs_s"] for r in rows]
     return {"breaking_point_msgs_s": breaking_point, "max_achieved_msgs_s": max(achieved) if achieved else None}
-
 
 def run_latency_trials(run_dir, n_trials=5):
     print(f"== Efficiency: latenza onset->alert ({n_trials} prove) ==")
@@ -99,7 +78,6 @@ def run_latency_trials(run_dir, n_trials=5):
     return {"trials": n_trials, "successful": len(valid),
             "avg_latency_s": (sum(valid) / len(valid)) if valid else None,
             "max_latency_s": max(valid) if valid else None}
-
 
 def run_scalability_experiment(run_dir):
     print("== Scalabilita': detection sotto carico crescente ==")
@@ -151,7 +129,6 @@ def run_scalability_experiment(run_dir):
         "precision_at_max_load": last["precision"], "recall_at_max_load": last["recall"],
         "achieved_at_max_load": last["achieved_msgs_s"],
     }
-
 
 def run_selfhealing_latency_experiment(run_dir, n_trials=2):
     print("== Reattivita': latenza previsione -> riparazione dispacciata (flotta reale) ==")
@@ -217,7 +194,6 @@ def run_selfhealing_latency_experiment(run_dir, n_trials=2):
         "avg_latency_s": (sum(valid) / len(valid)) if valid else None,
     }
 
-
 def main():
     run_id, run_dir = new_run_dir("efficiency")
     print(f"Run: {run_id} -> {run_dir}")
@@ -233,7 +209,6 @@ def main():
     }
     update_index("efficiency", run_id, summary)
     print(f"\nFatto. Risultati in {run_dir}")
-
 
 if __name__ == "__main__":
     main()

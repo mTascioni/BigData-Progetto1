@@ -1,12 +1,4 @@
 #!/bin/bash
-# Genera l'URDF del TurtleBot3 con i plugin Gazebo (diff_drive, imu, laser)
-# namespaced per il multi-robot. I xacro di turtlebot3_description NON
-# supportano un argomento di namespace: senza questo passaggio, i plugin
-# pubblicherebbero tutti su /cmd_vel, /odom, /scan, /imu globali (collisione
-# fra robot) indipendentemente dal <group ns="..."> del launch file, perche'
-# i plugin Gazebo girano dentro gzserver, non come nodi roslaunch namespaced.
-#
-# Uso: gen_robot_description.sh <model> <robot_id>
 set -euo pipefail
 
 MODEL="$1"

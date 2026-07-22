@@ -1,6 +1,3 @@
-"""Conformita' allo schema condiviso dei messaggi: verificato sui dati che
-circolano DAVVERO sui topic Kafka in questo momento, non su fixture
-statiche."""
 from conftest import collect_messages, consume_topic, query_sql, start_consumer, start_generator, wait_generator_done
 
 TELEMETRY_FIELDS = {
@@ -25,11 +22,7 @@ PREDICTIONS_FIELDS = {
     "critical_threshold", "predicted_crossing_ts", "lead_time_s", "model", "n_points",
 }
 
-
 def test_telemetry_schema_conforme_al_contratto_condiviso():
-    # la simulazione ROS reale e' in pausa per tutta la sessione di test
-    # (vedi conftest.py, _pause_real_simulation): si usa il generatore per
-    # avere comunque telemetria live da verificare.
     consumer = start_consumer("telemetry")
     start_generator({"num_robots": 2, "hz": 3, "duration_s": 6})
     messages = collect_messages(consumer, timeout_s=10)
@@ -44,7 +37,6 @@ def test_telemetry_schema_conforme_al_contratto_condiviso():
             )
         assert m["task_state"] in TASK_STATES, f"task_state non valido: {m['task_state']}"
 
-
 def test_fleet_state_schema():
     consumer = start_consumer("fleet_state")
     start_generator({"num_robots": 2, "hz": 3, "duration_s": 6})
@@ -56,13 +48,8 @@ def test_fleet_state_schema():
         assert not missing, f"campi mancanti in fleet_state: {missing} ({m})"
         assert isinstance(m["health_anomaly"], bool)
 
-
 def test_injected_faults_schema():
-    consumer = start_consumer("injected_faults")  # iscritto PRIMA di scatenare il guasto
-    # genera un guasto controllato invece di aspettare che ne capiti uno reale.
-    # "random" con num_robots=1 si risolve deterministicamente sull'unico
-    # robot esistente (un robot_id inventato verrebbe ignorato e il guasto
-    # ripiegherebbe comunque su un robot a caso, con nome imprevedibile).
+    consumer = start_consumer("injected_faults")
     start_generator({
         "num_robots": 1, "hz": 2, "duration_s": 8, "robot_id_prefix": "SCHEMA",
         "faults": [{"fault_type": "spike_corrente", "robot_id": "random", "start_time_s": 1, "duration_s": 4}],
@@ -77,7 +64,6 @@ def test_injected_faults_schema():
     assert event["fault_type"] == "spike_corrente"
     assert isinstance(event["params"], dict) and event["params"], "params vuoto o non e' un dict"
     assert event["end_ts"] > event["start_ts"]
-
 
 def test_predictions_schema():
     result = query_sql("SELECT * FROM predictions LIMIT 5")

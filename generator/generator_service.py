@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-"""Servizio HTTP di controllo per il generatore sintetico: processo
-persistente nel container `ros` che la dashboard puo' avviare/fermare/
-interrogare, invece di dover lanciare synthetic_generator.py a mano da CLI.
-Un solo run alla volta (un secondo POST /start mentre uno e' attivo viene
-rifiutato con 409).
-
-Stesso stile di streaming/query_service.py: http.server nativo, niente
-Flask per poche route.
-"""
 import json
 import os
 import threading
@@ -32,16 +23,14 @@ _thread = None
 _stop_event = None
 _status = {"running": False}
 _log_lines = []
-_fault_injectors = {}  # robot_id -> FaultInjector del run attivo, per l'iniezione live
+_fault_injectors = {}
 MAX_LOG_LINES = 200
-
 
 def _log(line):
     print(line, flush=True)
     _log_lines.append(line)
     if len(_log_lines) > MAX_LOG_LINES:
         del _log_lines[: len(_log_lines) - MAX_LOG_LINES]
-
 
 def _run_in_thread(config, run_id):
     global _status
@@ -63,10 +52,9 @@ def _run_in_thread(config, run_id):
             run_id=run_id,
             fault_injectors_out=_fault_injectors,
         )
-    except Exception as exc:  # noqa: BLE001 -- riportato via /status, non deve morire silenziosamente
+    except Exception as exc:
         _log(f"ERRORE nel generatore: {exc}")
         _status.update(running=False, error=str(exc))
-
 
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, status, payload):
@@ -149,11 +137,9 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         print(f"[generator_service] {self.address_string()} - {fmt % args}")
 
-
 def main():
     print(f"generator_service in ascolto su :{PORT}, CONFIG_DIR={CONFIG_DIR}")
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
-
 
 if __name__ == "__main__":
     main()

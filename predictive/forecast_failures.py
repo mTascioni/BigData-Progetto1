@@ -1,22 +1,4 @@
 #!/usr/bin/env python3
-"""Previsione offline dei guasti sui canali di salute.
-
-Per ogni robot e ciascun canale di salute (motor_temp, motor_current,
-battery_pct), guarda la finestra recente dello storico persistito e, solo
-se c'e' gia' un trend abbastanza marcato da non essere rumore nominale,
-allena una regressione lineare sulla serie ricampionata ed estrapola la
-retta in avanti fino a trovare l'istante previsto di superamento della
-soglia critica -> "lead time" (tempo di vita utile residuo). Scrive
-`/data/predictions`.
-
-Regressione lineare invece di ARIMA/Prophet/LSTM: i segnali che vogliamo
-prevedere (rampe di guasto quasi lineari, es. deriva_termica) non hanno
-bisogno di un modello piu' complesso, ed e' molto piu' semplice da
-spiegare e verificare. Le soglie critiche non sono arbitrarie: coincidono
-coi valori-obiettivo delle firme di guasto fissate in config/experiment.json
-(`plateau_temp_c` di deriva_termica, `peak_a` di spike_corrente) -- e' li'
-che un guasto di quel tipo, se non corretto, porterebbe la metrica.
-"""
 import argparse
 import glob
 import os
@@ -26,15 +8,11 @@ import numpy as np
 import pandas as pd
 
 CRITICAL_THRESHOLDS = {
-    "motor_temp": {"direction": "above", "value": 85.0},    # = plateau_temp_c di deriva_termica
-    "motor_current": {"direction": "above", "value": 4.5},  # = peak_a di spike_corrente
+    "motor_temp": {"direction": "above", "value": 85.0},
+    "motor_current": {"direction": "above", "value": 4.5},
     "battery_pct": {"direction": "below", "value": 10.0},
 }
 
-# sotto questa pendenza (per canale, per minuto) non e' un trend verso il
-# guasto, e' rumore nominale -- calibrate sui rate nominali di
-# config/experiment.json: drain nominale batteria -0.5%/min in movimento,
-# quindi la soglia va ben oltre per non scattare sempre.
 MIN_SLOPE_PER_MIN = {
     "motor_temp": 0.5,
     "motor_current": 0.05,
@@ -42,19 +20,11 @@ MIN_SLOPE_PER_MIN = {
 }
 
 RESAMPLE_S = 5
-MIN_POINTS = 12  # almeno un minuto di storia ricampionata per tentare un fit
-FORECAST_HORIZON_S = 1800  # non si prevede oltre 30 minuti nel futuro
-
+MIN_POINTS = 12
+FORECAST_HORIZON_S = 1800
 
 def load_parquet_dir(path):
     files = glob.glob(os.path.join(path, "**", "*.parquet"), recursive=True)
-    # un file Parquet da 0 byte capita se lo streaming writer viene ucciso a
-    # meta' batch (es. pkill su persistence_job.py): pandas/pyarrow, leggendo
-    # la cartella direttamente (senza passare dal commit log Spark
-    # _spark_metadata, che lo escluderebbe), altrimenti crasha. Il file e'
-    # comunque vuoto per definizione: cancellarlo non perde dati veri, e
-    # lasciare a pd.read_parquet() la cartella intera (non i singoli file)
-    # preserva l'inferenza delle colonne di partizione Hive-style.
     empty = [f for f in files if os.path.getsize(f) == 0]
     for f in empty:
         os.remove(f)
@@ -64,18 +34,12 @@ def load_parquet_dir(path):
         return pd.DataFrame()
     return pd.read_parquet(path)
 
-
 def resample_channel(telemetry, robot_id, channel, lookback_s, now_ts, run_id=None):
     mask = (
         (telemetry["robot_id"] == robot_id)
         & (telemetry["ts"] >= now_ts - lookback_s * 1000)
         & (telemetry["ts"] <= now_ts)
     )
-    # Isolamento fra run diversi: robot_id e' riusato ad ogni run del
-    # generatore sintetico (es. SIM00000), quindi senza filtrare per run_id
-    # il trend calcolato mischierebbe run diversi. run_id=None (storico
-    # pre-esistente senza questo campo) mantiene il comportamento
-    # precedente, nessun filtro.
     if run_id is not None and "run_id" in telemetry.columns:
         mask &= telemetry["run_id"] == run_id
     sub = telemetry[mask][["ts", channel]].dropna().sort_values("ts")
@@ -84,20 +48,12 @@ def resample_channel(telemetry, robot_id, channel, lookback_s, now_ts, run_id=No
     sub = sub.assign(t=pd.to_datetime(sub["ts"], unit="ms")).set_index("t")[channel]
     return sub.resample(f"{RESAMPLE_S}s").mean().interpolate()
 
-
 def fit_linear_trend(series):
-    """Regressione lineare ai minimi quadrati: valore = intercept + slope * t,
-    con t in secondi dall'inizio della finestra ricampionata. Ritorna
-    (intercept, slope_per_s)."""
     t = (series.index - series.index[0]).total_seconds().values
     slope, intercept = np.polyfit(t, series.values, 1)
     return intercept, slope
 
-
 def find_crossing_s(intercept, slope, direction, critical_value, max_horizon_s):
-    """Istante (in secondi dall'inizio della finestra) in cui la retta
-    incrocia la soglia critica, o None se non succede entro l'orizzonte
-    massimo o se il trend va nella direzione sbagliata."""
     if slope == 0:
         return None
     reaches_threshold = (slope > 0 and direction == "above") or (slope < 0 and direction == "below")
@@ -107,7 +63,6 @@ def find_crossing_s(intercept, slope, direction, critical_value, max_horizon_s):
     if t_cross < 0 or t_cross > max_horizon_s:
         return None
     return t_cross
-
 
 def analyze(telemetry, robot_id, channel, lookback_s, now_ts, run_id=None):
     series = resample_channel(telemetry, robot_id, channel, lookback_s, now_ts, run_id=run_id)
@@ -146,7 +101,6 @@ def analyze(telemetry, robot_id, channel, lookback_s, now_ts, run_id=None):
         "n_points": int(len(series)),
     }
 
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default="/data")
@@ -167,11 +121,6 @@ def main():
 
     now_ts = args.now_ts if args.now_ts is not None else int(telemetry["ts"].max())
 
-    # Isolamento fra run: di default si analizza solo l'ULTIMO run_id
-    # presente nello storico (quello a cui appartiene now_ts), non tutto lo
-    # storico assieme -- altrimenti robot_id riusati fra run diversi (es.
-    # il generatore sintetico) mischierebbero trend di run differenti in
-    # un'unica retta.
     run_id = args.run_id if "run_id" in telemetry.columns else None
     if run_id is None and "run_id" in telemetry.columns and telemetry["run_id"].notna().any():
         run_id = telemetry.loc[telemetry["ts"] == telemetry["ts"].max(), "run_id"].iloc[0]
@@ -200,7 +149,6 @@ def main():
 
     print(f"\n{len(predictions)} previsioni scritte in {out_path}:")
     print(out_df.to_string(index=False))
-
 
 if __name__ == "__main__":
     main()

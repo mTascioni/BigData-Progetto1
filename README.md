@@ -2,8 +2,6 @@
 
 Progetto Big Data (corso Big Data, Roma Tre, 2026): ingestione continua di telemetria da una flotta di AGV (TurtleBot3 in ROS/Gazebo), detection real-time delle anomalie (salute + deadlock/livelock) con Spark Structured Streaming, previsione offline dei guasti, interrogazione in linguaggio naturale (layer TAG: NL → SQL → esecuzione su Spark SQL → risposta sintetizzata) e dashboard live.
 
-Documentazione tecnica completa nella relazione ([`docs/relazione/relazione.pdf`](docs/relazione/relazione.pdf)); lo sviluppo passo per passo, con le scelte e i problemi incontrati, è in [`docs/passi/`](docs/passi/).
-
 ## Regole del progetto
 
 - **Lo schema del messaggio di telemetria è l'unica fonte di verità**: ogni componente (nodo-ponte ROS, generatore sintetico, job Spark, storage, layer TAG) si conforma allo stesso contratto — vedi sotto.
@@ -47,25 +45,34 @@ Schema del messaggio di telemetria (JSON, un tick per robot, topic Kafka `teleme
 
 ## Struttura del progetto
 
-```
-docker-compose.yml     # orchestrazione di tutti i servizi
-config/                 # grafo del magazzino, esperimento (fleet, guasti), preset per il generatore
-ros/                    # ROS Noetic + Gazebo + TurtleBot3: sorgente dati, nodo-ponte verso Kafka
-generator/               # generatore sintetico (scale test + guasti) e il suo servizio di controllo HTTP
-streaming/               # job PySpark: detection real-time, persistenza su Parquet, query_service (layer TAG)
-offline/                 # soglie adattive (riduzione falsi positivi)
-predictive/              # previsione offline dei guasti (regressione lineare)
-backend/                 # Node/Express: serve la dashboard, endpoint TAG, websocket
-dashboard/               # frontend (HTML + canvas 2D + JS), nessun framework
-test/                    # suite pytest: verifica di correttezza (schema, ground truth, precision/recall, ...)
-eval/                    # esperimenti di valutazione sperimentale: numeri/grafici per la relazione
-docs/passi/               # documentazione dettagliata dello sviluppo (scelte, problemi, verifica)
-```
+**`ros/`** — tutto ciò che riguarda ROS1 Noetic + Gazebo + TurtleBot3. `catkin_ws/src/shf_bringup/` è il pacchetto ROS vero e proprio: `scripts/` (i nodi Python: `kafka_bridge.py` legge i topic ROS e pubblica su Kafka, `graph_navigator.py` fa muovere ogni robot lungo il grafo, `fleet_control_service.py` espone l'HTTP usato dal backend per avviare/fermare la simulazione e iniettare guasti dal vivo), `launch/` (i file `.launch` che avviano uno o N robot in Gazebo), `worlds/` (la mappa del magazzino in formato Gazebo/SDF), `config/` (parametri di navigazione). `bags/` è dove finiscono eventuali registrazioni ROS bag.
+
+**`streaming/`** — i job Spark Structured Streaming: `detection_job.py` (real-time: salute, deadlock, livelock, previsione) e `persistence_job.py` (batch: scrive tutto su Parquet), più `query_service.py` (il servizio HTTP che espone Spark SQL al backend per il layer TAG), `schemas.py` (gli schemi condivisi), `isolation_forest_model.py`/`train_isolation_forest.py`/`models/` (il modello di anomaly detection).
+
+**`generator/`** — la simulazione sintetica alternativa a ROS/Gazebo: `synthetic_generator.py` (la logica di simulazione a eventi) e `generator_service.py` (il servizio HTTP che la dashboard usa per avviarla/fermarla).
+
+**`predictive/`** — `forecast_failures.py`, l'analisi predittiva offline (regressione lineare sui trend dei canali di salute per stimare quando un robot supererà una soglia).
+
+**`offline/`** — `adaptive_thresholds.py`, il job batch che ricalibra le soglie di salute sullo storico invece di usare valori fissi.
+
+**`eval/`** — la suite di valutazione sperimentale: `run_effectiveness.py`/`run_efficiency.py` (gli esperimenti veri e propri), `eval_service.py` (il servizio HTTP che li lancia on-demand dalla dashboard), `common.py` (helper condivisi), `reference_questions.py` (le domande di riferimento per il layer TAG).
+
+**`test/`** — la suite pytest (23 test) che verifica la correttezza del sistema con scenari costruiti ad hoc, indipendente da `eval/` che invece misura le metriche.
+
+**`backend/`** — il server Node.js/Express: `src/routes/` (gli endpoint HTTP), `src/services/` (la logica: consumo Kafka, layer TAG, guardia SQL, stato flotta in memoria), `src/config/` (le credenziali Hugging Face).
+
+**`dashboard/`** — il frontend: `index.html`, `app.js`, `style.css` — nessun framework, canvas 2D + WebSocket puro.
+
+**`spark/`** — il Dockerfile dell'immagine Spark (master e worker condividono la stessa immagine).
+
+**`config/`** — i file di configurazione condivisi letti da più componenti: `warehouse_graph.json` (il grafo del magazzino), `experiment.json` (robot, missioni, nodi di riserva/riparazione), `presets/` (le topologie alternative per il generatore sintetico).
+
+**Radice** — `docker-compose.yml` (orchestrazione dei 5 container), questo `README.md`.
 
 ## Prerequisiti
 
 - Docker + Docker Compose
-- Almeno ~6 core e 12GB di RAM liberi per la flotta reale (Gazebo + Kafka + due cluster Spark insieme sono pesanti — misurato: ~2GB per lo Spark master, ~2-4GB per lo worker, ~1GB per Gazebo con 4 robot, escluso il resto dello stack; con meno risorse tutto funziona ma la dashboard può risultare a scatti, vedi `docs/passi/11-dashboard.md`). Il generatore sintetico da solo (senza la flotta ROS reale) è molto più leggero.
+- Almeno ~6 core e 12GB di RAM liberi per la flotta reale (Gazebo + Kafka + due cluster Spark insieme sono pesanti — misurato: ~2GB per lo Spark master, ~2-4GB per lo worker, ~1GB per Gazebo con 4 robot, escluso il resto dello stack; con meno risorse tutto funziona ma la dashboard può risultare a scatti). Il generatore sintetico da solo (senza la flotta ROS reale) è molto più leggero.
 - Un token API di Hugging Face (gratuito), solo per il layer TAG (domande in linguaggio naturale) — il resto della pipeline funziona anche senza
 
 ## Scaricare il progetto
@@ -102,9 +109,9 @@ docker compose build   # la prima volta: ~5-10 minuti (immagine ROS+Gazebo+Turtl
 docker compose up -d
 ```
 
-Un solo comando: Kafka, Spark (master+worker), il servizio di query TAG, il job di detection real-time, il generatore sintetico e il backend partono tutti da soli, senza bisogno di altri comandi manuali (vedi `docs/passi/01-scaffold-infrastruttura.md`, sezione "Avvio a comando singolo"). Il boot completo richiede circa 1-2 minuti.
+Un solo comando: Kafka, Spark (master+worker), il servizio di query TAG, il job di detection real-time, il generatore sintetico e il backend partono tutti da soli, senza bisogno di altri comandi manuali. Il boot completo richiede circa 1-2 minuti.
 
-**La simulazione ROS/Gazebo (la flotta reale) non parte da sola** — è una scelta deliberata per lasciarti il controllo su quando avviarla e con quanti robot (vedi `docs/passi/01-scaffold-infrastruttura.md`, sezione "La simulazione ROS non parte più da sola"): apri la dashboard (http://localhost:3000), card "Flotta reale — controllo", scegli la scala (`small` = 4 robot R1-R4, `large` = 8 robot R1-R8) e premi "Avvia simulazione" — richiede ~15-20s per essere operativa. In alternativa da riga di comando: `docker exec shf-ros supervisorctl start sim_multi_robot` (scala `small` di default).
+**La simulazione ROS/Gazebo (la flotta reale) non parte da sola** — è una scelta deliberata per lasciarti il controllo su quando avviarla e con quanti robot: apri la dashboard (http://localhost:3000), card "Flotta reale — controllo", scegli la scala (`small` = 4 robot R1-R4, `large` = 8 robot R1-R8) e premi "Avvia simulazione" — richiede ~15-20s per essere operativa. In alternativa da riga di comando: `docker exec shf-ros supervisorctl start sim_multi_robot` (scala `small` di default).
 
 ## Connettersi
 
@@ -126,8 +133,6 @@ curl -s http://localhost:5001/health                # generator_service (pannell
 curl -s http://localhost:5002/health                # fleet_control_service (guasti live, avvio/arresto simulazione)
 ```
 
-Per una verifica più a fondo (schema dei messaggi, precision/recall della detection, accuratezza delle previsioni, execution accuracy del TAG): [`test/README.md`](test/README.md).
-
 ## Esperimenti
 
 Dalla dashboard (in fondo alla pagina, card "Risultati sperimentazioni"): bottone "Esegui ora" per effectiveness (precision/recall detection, errore previsione, accuratezza TAG) o efficiency (throughput, latenza) — i risultati compaiono man mano che ogni sotto-esperimento finisce, nessun comando manuale necessario. La simulazione ROS reale (se l'hai avviata) non va fermata: gli esperimenti usano il generatore sintetico, non la flotta reale.
@@ -139,7 +144,7 @@ docker exec shf-ros bash -c "cd /opt/shf/eval && python3 run_effectiveness.py"  
 docker exec shf-ros bash -c "cd /opt/shf/eval && python3 run_efficiency.py"      # throughput, latenza
 ```
 
-I risultati (CSV) sono in `/data/eval/` sul volume condiviso. Dettagli: [`docs/passi/13-valutazione-sperimentale.md`](docs/passi/13-valutazione-sperimentale.md).
+I risultati (CSV) sono in `/data/eval/` sul volume condiviso.
 
 ## Fermare tutto
 

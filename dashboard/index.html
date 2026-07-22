@@ -13,7 +13,7 @@
 
   <main class="hero">
     <section class="map-panel">
-      <div id="map-badge" class="map-badge">Vista: grafo reale (medium)</div>
+      <div id="map-badge" class="map-badge">Vista: grafo ROS (medium)</div>
       <canvas id="map" width="820" height="480"></canvas>
       <div class="legend">
         <span><i class="dot moving"></i> moving</span>
@@ -23,22 +23,20 @@
         <span><i class="dot anomaly"></i> anomalia di salute</span>
         <span><i class="dot livelock"></i> livelock</span>
         <span><i class="line choke"></i> corridoio a corsia singola</span>
-        <span><i class="line deadlock"></i> arco in deadlock</span>
-        <span><i class="dot synthetic"></i> anello tratteggiato = robot sintetico (generatore)</span>
+        <span><i class="line deadlock"></i> deadlock</span>
       </div>
-      <p class="hint">Un robot reale esiste solo sul grafo reale ("medium"): mentre e' attivo un run del generatore su un altro preset, i robot reali restano fuori dalla mappa (ma non dalle tabelle qui sotto) per non mescolare due sistemi di coordinate diversi.</p>
     </section>
 
     <aside class="side-panel">
       <section class="card sim-control-card">
         <h2>Avvia simulazione</h2>
         <div class="tab-bar" id="sim-tabs" role="tablist">
-          <button type="button" class="tab-btn active" data-tab="real" role="tab" aria-selected="true">Flotta reale (ROS/Gazebo)</button>
-          <button type="button" class="tab-btn" data-tab="synthetic" role="tab" aria-selected="false">Generatore sintetico</button>
+          <button type="button" class="tab-btn active" data-tab="real" role="tab" aria-selected="true">Flotta ROS/Gazebo</button>
+          <button type="button" class="tab-btn" data-tab="synthetic" role="tab" aria-selected="false">Flotta Generata senza simulazione</button>
         </div>
 
         <div id="sim-tab-real" class="tab-panel">
-          <p class="hint">Robot ROS/Gazebo veri, con corridoi fisici. Un'anomalia di salute manda automaticamente il robot in riparazione e dispaccia una riserva sulla sua missione.</p>
+          <p class="hint">Robot ROS/Gazebo veri, con corridoi fisici. Un'anomalia di salute manda automaticamente il robot in riparazione e fa intervenire robot di riserva.</p>
           <form id="sim-control-form" class="form-row">
             <label>Scala
               <select id="sim-scale-select">
@@ -54,7 +52,7 @@
           <div id="sim-status" class="hint">Simulazione ferma.</div>
 
           <h3>Guasto live (durante il run)</h3>
-          <p class="hint">Guasti iniettati dal vivo sui robot ROS/Gazebo reali: finiscono nella telemetria vera, non in un canale separato.</p>
+          <p class="hint">Guasti iniettati dal vivo sui robot ROS/Gazebo</p>
           <form id="real-fault-form">
             <div class="form-row">
               <label>Robot
@@ -63,10 +61,10 @@
               <label>Guasto
                 <select id="real-fault-type">
                   <option value="deriva_termica">deriva_termica (motor_temp)</option>
-                  <option value="spike_corrente" selected>spike_corrente (motor_current)</option>
+                  <option value="spike_corrente" selected>picco_corrente (motor_current)</option>
                   <option value="batteria_collasso">batteria_collasso (battery_pct)</option>
                   <option value="sensore_bloccato">sensore_bloccato (freeze)</option>
-                  <option value="preavviso_intermittente">preavviso_intermittente (raffiche, motor_current)</option>
+                  <option value="preavviso_intermittente">preavviso_intermittente (motor_current)</option>
                 </select>
               </label>
               <label>Durata (s)
@@ -78,8 +76,8 @@
             </div>
           </form>
 
-          <h3>Perturbazione live (rumore sensori)</h3>
-          <p class="hint">Non un guasto: rumore extra su un canale, per generare falsi positivi controllati e verificare che il sistema li impari a filtrare (<code>offline/adaptive_thresholds.py</code>). Non finisce in <code>injected_faults</code> -- non e' ground truth di un guasto vero.</p>
+          <h3>Rumore Sensori</h3>
+          <p class="hint">Rumore su topic, per generare falsi positivi (<code>offline/adaptive_thresholds.py</code>). Non finisce in <code>injected_faults</code> </p>
           <form id="real-perturbation-form">
             <div class="form-row">
               <label>Robot
@@ -104,7 +102,7 @@
         </div>
 
         <div id="sim-tab-synthetic" class="tab-panel" hidden>
-          <p class="hint">Robot simulati via software, senza ROS/Gazebo: utile per test di carico e scenari con guasti pianificati. Non interferisce con la flotta reale.</p>
+          <p class="hint">Robot simulati via generazione "sintetica" (senza ROS/Gazebo).</p>
           <form id="generator-form">
             <div class="form-row">
               <label>Topologia
@@ -159,7 +157,7 @@
             </div>
           </form>
 
-          <h3>Perturbazione live (rumore sensori)</h3>
+          <h3>Rumore Sensori</h3>
           <form id="gen-live-perturbation-form">
             <div class="form-row">
               <label>Robot
@@ -185,10 +183,10 @@
       </section>
 
       <section class="card">
-        <h2>Chiedi ai dati</h2>
-        <p class="hint">Domanda in linguaggio naturale &rarr; Qwen-Coder genera SQL &rarr; eseguito su Spark SQL.</p>
+        <h2>Chiedi Informazioni sul sistema</h2>
+        <p class="hint">Qwen-Coder genera SQL per esecuzione su SparkSQL</p>
         <form id="tag-form">
-          <textarea id="tag-question" rows="2" placeholder="Es: quanti guasti sono stati iniettati per ogni robot?"></textarea>
+          <textarea id="tag-question" rows="2" placeholder="Es: Quanti robot hanno subito guasti?"></textarea>
           <button type="submit">Chiedi</button>
         </form>
         <div id="tag-result"></div>
@@ -200,7 +198,7 @@
   <main class="status-row">
     <section class="card fleet-table-card">
       <h2>Tutti i robot</h2>
-      <p class="hint">Valori live da <code>fleet_state</code> (include anche i robot-token del generatore sintetico).</p>
+      <p class="hint">Valori live da <code>fleet_state</code></p>
       <div class="table-scroll">
         <table id="fleet-table">
           <thead>
@@ -216,9 +214,7 @@
     </section>
 
     <section class="card real-fleet-card">
-      <h2>Flotta reale — dettaglio</h2>
-      <p class="hint">Guasti e perturbazioni si iniettano dal pannello "Avvia simulazione" qui sopra, tab "Flotta reale".</p>
-
+      <h2>Simulazione ROS</h2>
       <table id="real-fleet-status">
         <thead><tr><th>Robot</th><th>Stato</th><th>Goal</th><th></th></tr></thead>
         <tbody></tbody>
@@ -229,7 +225,7 @@
       <h2>Eventi recenti</h2>
       <p class="hint">Deadlock e livelock rilevati in streaming, evidenziati anche sulla mappa per ~8s.</p>
       <ul id="events-list"></ul>
-      <p id="events-empty" class="hint">Nessun evento comportamentale rilevato finora.</p>
+      <p id="events-empty" class="hint">Nessun evento "comportamentale" rilevato finora.</p>
     </section>
 
     <section class="card">
@@ -245,8 +241,8 @@
     </section>
 
     <section class="card raw-stream-card">
-      <h2>Streaming live (topic Kafka)</h2>
-      <p class="hint">Messaggi campionati in tempo reale (al piu' uno ogni ~200ms per topic), solo per vedere cosa passa -- non salvati da nessuna parte.</p>
+      <h2>Topic Kafka in streaming</h2>
+      <p class="hint">Messaggi campionati in tempo reale (al piu' uno ogni ~200ms per topic)</p>
       <div class="tab-bar" id="raw-stream-tabs" role="tablist">
         <button type="button" class="tab-btn active" data-topic="telemetry">telemetry</button>
         <button type="button" class="tab-btn" data-topic="anomalies">anomalies</button>
@@ -263,8 +259,8 @@
   <h2 class="section-title">Esperimenti</h2>
   <main class="eval-row">
     <section class="card eval-card" id="eval-effectiveness-card">
-      <h2>Risultati sperimentazioni — effectiveness</h2>
-      <p class="hint"><code>eval/run_effectiveness.py</code>: precision/recall della detection, accuratezza della previsione offline e di quella live in streaming, execution accuracy del layer TAG. Si lancia on-demand: i risultati compaiono qui man mano che ogni sotto-esperimento finisce.</p>
+      <h2>Risultati sperimentazioni — efficienza</h2>
+      <p class="hint"><code>eval/run_effectiveness.py</code>: (precisione della detection; accuratezza della previsione offline e di quella streaming, accuratezza del layer TAG) i risultati compaiono qui man mano che ogni sotto-esperimento finisce.</p>
       <div class="form-actions">
         <button type="button" id="eval-effectiveness-run-btn">Esegui ora</button>
       </div>
@@ -274,8 +270,8 @@
     </section>
 
     <section class="card eval-card" id="eval-efficiency-card">
-      <h2>Risultati sperimentazioni — efficiency</h2>
-      <p class="hint"><code>eval/run_efficiency.py</code>: throughput a carico crescente, latenza onset&rarr;alert, detection sotto carico (scalabilit&agrave;), latenza del loop di auto-riparazione sulla flotta reale (salta se non &egrave; attiva). Si lancia on-demand: i risultati compaiono qui man mano che ogni sotto-esperimento finisce.</p>
+      <h2>Risultati sperimentazioni — efficacia</h2>
+      <p class="hint"><code>eval/run_efficiency.py</code>: throughput a carico crescente; latenza onset&rarr;alert; detection sotto carico (scalabilit&agrave;), latenza del loop di auto-riparazione sulla flotta reale (salta se non &egrave; attiva). I risultati compariranno qui man mano che ogni esperimento finisce.</p>
       <div class="form-actions">
         <button type="button" id="eval-efficiency-run-btn">Esegui ora</button>
       </div>

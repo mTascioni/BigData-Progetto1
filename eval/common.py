@@ -1,14 +1,3 @@
-"""Helper condivisi dagli script di valutazione sperimentale.
-
-A differenza di test/conftest.py (suite pytest pass/fail, verifica di
-correttezza) questi script producono i numeri per la tesina, letti anche
-dal pannello "Risultati sperimentazioni" della dashboard, che lancia i run
-on-demand via eval_service.py e ne disegna i risultati live in JS/canvas,
-non da PNG pre-generati (quelli, se servono per il PDF, vanno prodotti a
-parte). Ogni run scrive in una cartella propria sotto /data/eval/ (sul
-volume Docker condiviso `shf-data`, cosi' backend/dashboard possono
-leggerli) e aggiorna un indice condiviso `/data/eval/index.json`.
-"""
 import json
 import math
 import os
@@ -19,14 +8,7 @@ from datetime import datetime, timezone
 import requests
 from confluent_kafka import Consumer, Producer
 
-
 def json_safe(obj):
-    """NaN/Infinity sono float Python legali (precision/f1 diventano NaN
-    quando TP+FP=0, caso normale, non un errore) ma non JSON valido: sia il
-    fetch() della dashboard sia JSON.parse in Node vanno in eccezione su un
-    letterale NaN nel body, silenziosamente (interrompe il polling live di
-    eval_service.py proprio quando arriva il primo risultato). Si convertono
-    in null prima di scrivere index.json o rispondere via HTTP."""
     if isinstance(obj, float):
         return None if (math.isnan(obj) or math.isinf(obj)) else obj
     if isinstance(obj, dict):
@@ -42,13 +24,10 @@ GENERATOR_SERVICE_URL = os.environ.get("GENERATOR_SERVICE_URL", "http://localhos
 CONFIG_DIR = os.environ.get("CONFIG_DIR", "/workspace/config")
 EVAL_DIR = os.environ.get("EVAL_DIR", "/data/eval")
 
-
 def load_experiment():
     with open(os.path.join(CONFIG_DIR, "experiment.json")) as f:
         return json.load(f)
 
-
-# ------------------------------------------------------------------ Kafka
 def start_consumer(topic):
     consumer = Consumer({
         "bootstrap.servers": KAFKA_BOOTSTRAP,
@@ -58,7 +37,6 @@ def start_consumer(topic):
     consumer.subscribe([topic])
     consumer.poll(2.0)
     return consumer
-
 
 def collect_messages(consumer, timeout_s, predicate=None):
     results = []
@@ -78,22 +56,17 @@ def collect_messages(consumer, timeout_s, predicate=None):
         consumer.close()
     return results
 
-
 def get_producer():
     return Producer({"bootstrap.servers": KAFKA_BOOTSTRAP})
-
 
 def produce_json(producer, topic, payload, key=None):
     producer.produce(topic, key=key.encode("utf-8") if key else None, value=json.dumps(payload).encode("utf-8"))
     producer.poll(0)
 
-
-# --------------------------------------------------------------- servizi
 def query_sql(sql):
     res = requests.post(f"{QUERY_SERVICE_URL}/query", json={"sql": sql}, timeout=30)
     res.raise_for_status()
     return res.json()
-
 
 def ask_tag(question):
     res = requests.post(f"{BACKEND_URL}/api/tag", json={"question": question}, timeout=90)
@@ -101,7 +74,6 @@ def ask_tag(question):
         return res.json()
     except ValueError:
         return {"error": f"risposta non JSON (status {res.status_code})"}
-
 
 def stop_generator():
     try:
@@ -113,13 +85,11 @@ def stop_generator():
             return
         time.sleep(0.5)
 
-
 def start_generator(config):
     stop_generator()
     res = requests.post(f"{GENERATOR_SERVICE_URL}/start", json=config, timeout=10)
     res.raise_for_status()
     return res.json()
-
 
 def wait_generator_done(timeout_s):
     end = time.time() + timeout_s
@@ -131,21 +101,14 @@ def wait_generator_done(timeout_s):
         time.sleep(1)
     raise TimeoutError(f"generatore non terminato entro {timeout_s}s (ultimo status: {status})")
 
-
-# ------------------------------------------------------------- risultati
 def new_run_dir(run_type):
-    """Crea /data/eval/<run_type>_<timestamp>/ e ritorna (run_id, path)."""
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     run_id = f"{run_type}_{ts}"
     path = os.path.join(EVAL_DIR, run_id)
     os.makedirs(path, exist_ok=True)
     return run_id, path
 
-
 def update_index(run_type, run_id, summary):
-    """Aggiunge/aggiorna una entry nell'indice condiviso letto dal backend
-    (GET /api/eval/results): un run per volta, il piu' recente per tipo e'
-    quello che la dashboard mostra di default."""
     index_path = os.path.join(EVAL_DIR, "index.json")
     os.makedirs(EVAL_DIR, exist_ok=True)
     try:

@@ -1,16 +1,6 @@
-"""Efficiency: throughput a carico crescente col generatore sintetico e
-latenza onset->alert. A differenza dei test di effectiveness, qui le
-soglie sono volutamente larghe: throughput/latenza dipendono dall'hardware
-su cui gira la suite, l'obiettivo e' individuare regressioni vere (crash,
-throughput vicino a zero, latenza fuori scala), non imporre un numero
-preciso. I valori misurati vengono stampati (usare `pytest -s` per
-vederli) -- sono lo stesso genere di dato che finira' nel report
-sperimentale (`eval/`), qui servono solo a verificare che tutto funzioni.
-"""
 import time
 
 from conftest import collect_messages, start_consumer, start_generator, wait_generator_done
-
 
 def test_throughput_carico_leggero():
     start_generator({"num_robots": 200, "hz": 5, "duration_s": 10})
@@ -25,7 +15,6 @@ def test_throughput_carico_leggero():
         "un collo di bottiglia qui indicherebbe una regressione, non un limite fisiologico"
     )
 
-
 def test_throughput_carico_alto_riporta_il_punto_di_rottura():
     start_generator({"num_robots": 3000, "hz": 10, "duration_s": 12})
     status = wait_generator_done(25)
@@ -34,24 +23,13 @@ def test_throughput_carico_alto_riporta_il_punto_di_rottura():
     ratio = achieved / target if target else 0
     print(f"\n[efficiency] carico alto: target={target:.0f} msg/s, raggiunto={achieved:.0f} msg/s ({ratio:.0%})")
 
-    # a carico molto alto e' normale che il processo Python del generatore
-    # diventi il collo di bottiglia (vedi docs/passi/12-generatore-sintetico.md):
-    # qui verifichiamo solo che il sistema regga comunque un carico
-    # sostanziale, non che raggiunga esattamente il target.
     assert achieved > target * 0.2, f"throughput crollato quasi a zero sotto carico ({achieved:.0f} msg/s)"
     assert status["errors"] == 0, "BufferError del producer: il buffer configurato non basta piu'"
 
-
 def test_latenza_onset_alert():
-    # pausa di assestamento: il test precedente (carico alto) lascia Spark
-    # indietro sul backlog dei micro-batch per qualche secondo dopo che il
-    # generatore ha gia' finito di inviare -- senza attesa, il guasto di
-    # QUESTO test arriva mentre la detection sta ancora smaltendo quello
-    # vecchio, gonfiando la latenza misurata oltre la soglia. Stessa causa
-    # gia' documentata per eval/run_efficiency.py (docs/passi/13).
     time.sleep(15)
     fault_consumer = start_consumer("injected_faults")
-    alert_consumer = start_consumer("anomalies")  # iscritto PRIMA di avviare il guasto, non dopo
+    alert_consumer = start_consumer("anomalies")
     start_generator({
         "num_robots": 1, "hz": 4, "duration_s": 15, "robot_id_prefix": "LATENCY",
         "faults": [{"fault_type": "spike_corrente", "robot_id": "random", "start_time_s": 2, "duration_s": 8}],
@@ -63,9 +41,6 @@ def test_latenza_onset_alert():
     assert fault_events, "il guasto di test non e' mai stato loggato su injected_faults"
     onset_ts_ms = fault_events[0]["start_ts"]
 
-    # finestra generosa: il guasto e' attivo da t=2s a t=10s, l'alert puo'
-    # essere gia' bufferizzato lato client (confluent-kafka riceve in
-    # background anche senza poll() espliciti) o arrivare solo ora.
     alert_events = collect_messages(
         alert_consumer, timeout_s=20,
         predicate=lambda e: e.get("type") == "salute" and str(e.get("robot_id", "")).startswith("LATENCY"),

@@ -1,9 +1,3 @@
-"""Domande di riferimento per l'execution accuracy del layer TAG.
-
-Ogni voce ha una domanda in linguaggio naturale e una query SQL di
-"verita' diretta" scritta a mano: eseguita sugli stessi dati nello stesso
-momento della domanda al TAG, cosi' il confronto resta valido anche mentre
-lo storico cresce (nessun valore atteso hardcoded)."""
 
 REFERENCE_QUESTIONS = [
     ("Quanti messaggi di telemetria ci sono in totale?",

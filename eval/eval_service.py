@@ -1,19 +1,4 @@
 #!/usr/bin/env python3
-"""Servizio HTTP di controllo per i run di valutazione sperimentale: la
-dashboard avvia un run con `POST /run` e ne legge l'avanzamento con
-`GET /status`, invece di aspettare un PNG pre-generato aggiornato ogni 30s.
-Un solo run alla volta (un secondo POST /run mentre uno e' attivo viene
-rifiutato con 409) -- stesso vincolo e stesso stile di
-generator_service.py: http.server nativo, niente Flask per poche route.
-
-A differenza di `python3 run_effectiveness.py` da riga di comando (che resta
-disponibile, produce solo CSV/JSON dentro /data/eval/<run_id>/, niente piu'
-PNG), qui i sotto-esperimenti (detection/prediction/tag oppure
-throughput/latency) vengono eseguiti in sequenza nello stesso thread e ogni
-risultato viene pubblicato in _status["results"] non appena pronto: la
-dashboard, facendo polling di /status, mostra ogni risultato appena arriva
-invece di aspettare la fine dell'intero run.
-"""
 import json
 import os
 import sys
@@ -21,9 +6,9 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import json_safe, new_run_dir, update_index  # noqa: E402
-import run_effectiveness  # noqa: E402
-import run_efficiency  # noqa: E402
+from common import json_safe, new_run_dir, update_index
+import run_effectiveness
+import run_efficiency
 
 PORT = int(os.environ.get("EVAL_SERVICE_PORT", "5003"))
 
@@ -45,7 +30,6 @@ STAGES = {
     ],
 }
 
-
 def _run_in_thread(run_type, run_id, run_dir):
     try:
         for stage_name, stage_fn in STAGES[run_type]:
@@ -56,7 +40,7 @@ def _run_in_thread(run_type, run_id, run_dir):
                 _status["results"][stage_name] = result
         with _lock:
             update_index(run_type, run_id, dict(_status["results"]))
-    except Exception as exc:  # noqa: BLE001 -- riportato via /status, non deve morire silenziosamente
+    except Exception as exc:
         print(f"[eval_service] ERRORE nel run {run_type}: {exc}", flush=True)
         with _lock:
             _status["error"] = str(exc)
@@ -64,7 +48,6 @@ def _run_in_thread(run_type, run_id, run_dir):
         with _lock:
             _status["running"] = False
             _status["stage"] = None
-
 
 class Handler(BaseHTTPRequestHandler):
     def _send_json(self, status, payload):
@@ -114,11 +97,9 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         print(f"[eval_service] {self.address_string()} - {fmt % args}")
 
-
 def main():
     print(f"eval_service in ascolto su :{PORT}")
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
-
 
 if __name__ == "__main__":
     main()

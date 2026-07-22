@@ -1,6 +1,3 @@
-// Costruisce il prompt per il text-to-SQL: schema intero delle 4 tabelle
-// Parquet + few-shot, in dialetto Spark SQL (il motore che esegue davvero
-// la query, streaming/query_service.py).
 
 const SCHEMA = `Hai a disposizione 4 tabelle Spark SQL (viste su file Parquet), tutte relative a una flotta di robot AGV (TurtleBot3) in un magazzino:
 
@@ -102,11 +99,6 @@ Regole:
   ];
 }
 
-// Terzo stadio del layer TAG (answer synthesis): senza questo passaggio il
-// sistema e' un text-to-SQL (query synthesis + execution, restituisce righe
-// grezze), non un TAG vero e proprio -- la definizione di TAG (Biswal et al.,
-// "TAG: A Unified Framework for Table-Augmented Generation", 2024) richiede
-// che l'LLM rielabori il risultato in una risposta, non solo generi la query.
 const MAX_ROWS_FOR_SYNTHESIS = 30;
 
 export function buildAnswerSynthesisMessages(question, sql, rows) {

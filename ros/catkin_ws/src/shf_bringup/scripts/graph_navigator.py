@@ -1,15 +1,4 @@
 #!/usr/bin/env python3
-"""Naviga un robot sul grafo del magazzino (config/warehouse_graph.json).
-
-All'avvio esegue la goal_sequence definita per lui in config/experiment.json.
-Ascolta anche un topic di controllo (~nav_control, std_msgs/String con un
-JSON {"nodes": [...]})
-che puo' interrompere la missione in corso e assegnarne una nuova: usato dal
-fleet_control_service.py per mandare un robot in riparazione o per dare a
-un robot di riserva (es. R4) la missione di uno guasto -- stesso meccanismo
-sia per l'avvio "programmato" sia per un cambio di missione dal vivo, non
-due percorsi di codice separati.
-"""
 import json
 import math
 import os
@@ -21,14 +10,12 @@ import tf.transformations
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from std_msgs.msg import String
 
-
 def load_config(config_dir):
     with open(os.path.join(config_dir, "warehouse_graph.json")) as f:
         graph = json.load(f)
     with open(os.path.join(config_dir, "experiment.json")) as f:
         experiment = json.load(f)
     return graph, experiment
-
 
 def make_goal(x, y, yaw, frame_id="odom"):
     goal = MoveBaseGoal()
@@ -43,14 +30,7 @@ def make_goal(x, y, yaw, frame_id="odom"):
     goal.target_pose.pose.orientation.w = qw
     return goal
 
-
 class MissionRunner:
-    """Esegue sequenze di nodi verso move_base, una alla volta, in un thread
-    dedicato. `assign()` puo' essere chiamato in qualunque momento (anche da
-    un altro thread, es. il callback del subscriber di controllo): annulla
-    il goal move_base corrente e sostituisce la missione in corso con quella
-    nuova, senza distinguere se la missione precedente era "quella
-    programmata all'avvio" o un'altra assegnata al volo."""
 
     def __init__(self, robot_id, client, node_pos, odom_frame, start_pos):
         self.robot_id = robot_id
@@ -69,12 +49,6 @@ class MissionRunner:
         self._new_mission.set()
 
     def freeze(self):
-        """Annulla il goal corrente e non assegna nulla di nuovo: il robot
-        resta fermo dov'e', in attesa di un comando futuro (guasto persistente
-        reale -- a differenza di assign(), qui non c'e' una missione nuova da
-        eseguire, solo l'interruzione di quella corrente). Stesso meccanismo
-        di risveglio di run_forever(): _pending resta None, quindi il loop
-        non chiama _run_sequence()."""
         with self._lock:
             self._pending = None
         self.client.cancel_goal()
@@ -106,8 +80,6 @@ class MissionRunner:
             prev_x, prev_y = self._current_pos
             yaw = math.atan2(y - prev_y, x - prev_x)
             distance = math.hypot(x - prev_x, y - prev_y)
-            # burger viaggia a ~0.15-0.22 m/s con questi parametri DWA: margine ampio
-            # per non troncare il wait_for_result su un arco ancora percorso ma lungo.
             timeout_s = max(60.0, distance / 0.15 + 20.0)
 
             rospy.loginfo("%s: invio goal verso il nodo '%s' (%.1f, %.1f), distanza %.1fm, timeout %.0fs",
@@ -124,14 +96,9 @@ class MissionRunner:
             else:
                 rospy.logwarn("%s: nodo '%s' NON raggiunto (stato move_base=%s)",
                                self.robot_id, node_id, self.client.get_state())
-            # Aggiorna comunque la posizione nominale nota (semplice, niente
-            # lettura di tf/odom qui): un goal non raggiunto lascia comunque
-            # il robot "vicino" al nodo, l'orientamento del prossimo tratto
-            # resta ragionevole anche se non perfetto.
             self._current_pos = (x, y)
 
         rospy.loginfo("%s: missione completata", self.robot_id)
-
 
 def main():
     rospy.init_node("graph_navigator")
@@ -189,7 +156,6 @@ def main():
         rospy.loginfo("%s: nessuna missione programmata in experiment.json, resto in attesa di comandi su ~nav_control", robot_id)
 
     runner.run_forever()
-
 
 if __name__ == "__main__":
     main()

@@ -1,11 +1,5 @@
 import { Kafka } from "kafkajs";
 
-// Pannello dashboard "streaming live" -- mostra cosa passa sui topic Kafka
-// in tempo reale, senza processarlo ne' salvarlo (nessun impatto sulla
-// pipeline di detection/persistenza gia' esistente). Un consumer
-// indipendente in piu', stesso pattern di anomalyStream.js/fleetStateStore.js:
-// group id univoco per processo, cosi' non interferisce con gli offset dei
-// consumer "veri".
 const KAFKA_BOOTSTRAP = process.env.KAFKA_BOOTSTRAP || "kafka:9092";
 const TOPICS = ["telemetry", "anomalies", "injected_faults", "fleet_state"];
 
@@ -19,11 +13,6 @@ export function onRawMessage(callback) {
   return () => listeners.delete(callback);
 }
 
-// telemetry da sola puo' arrivare a centinaia di messaggi/s con molti robot
-// (sweep di scala del generatore sintetico): senza un limite, il pannello
-// spingerebbe altrettanti messaggi websocket a ogni client per un pannello
-// che serve solo a "vedere cosa passa", non a processarlo tutto. Si
-// campiona ad al piu' un messaggio ogni MIN_INTERVAL_MS per topic.
 const MIN_INTERVAL_MS = 200;
 const lastForwardedAt = {};
 

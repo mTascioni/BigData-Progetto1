@@ -1,18 +1,4 @@
 #!/usr/bin/env python3
-"""Valutazione sperimentale — effectiveness.
-
-Tre esperimenti, ciascuno scrive CSV + un grafico in /data/eval/<run_id>/:
-1. Detection: precision/recall/F1 delle anomalie di salute su un set di
-   robot con guasto noto e un set senza, generati in modo controllato.
-2. Previsione: errore (secondi) fra il lead time previsto dalla regressione
-   lineare e quello vero, calcolato analiticamente, su piu'
-   scenari di trend sintetici con pendenza nota.
-3. TAG: execution accuracy sulle domande di riferimento
-   (eval/reference_questions.py), confrontando la risposta con una query
-   SQL di verita' scritta a mano sugli stessi dati.
-
-Uso: `python3 run_effectiveness.py` (dentro il container ros).
-"""
 import csv
 import glob
 import os
@@ -24,20 +10,18 @@ import time
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (  # noqa: E402
+from common import (
     ask_tag, collect_messages, new_run_dir, query_sql,
     start_consumer, start_generator, update_index, wait_generator_done,
 )
-from reference_questions import REFERENCE_QUESTIONS  # noqa: E402
+from reference_questions import REFERENCE_QUESTIONS
 
 FORECAST_SCRIPT = "/opt/shf/predictive/forecast_failures.py"
 
-
-# ------------------------------------------------------------- detection
 def run_detection_experiment(run_dir):
     print("== Detection: precision/recall/F1 (anomalie di salute) ==")
     n_robots = 8
-    faulty_idx = {0, 2, 4}  # robot con guasto noto, gli altri no
+    faulty_idx = {0, 2, 4}
     prefix = "EVAL"
     robot_ids = [f"{prefix}{i:05d}" for i in range(n_robots)]
     faults = [
@@ -88,8 +72,6 @@ def run_detection_experiment(run_dir):
     print(f"  precision={precision:.2f} recall={recall:.2f} f1={f1:.2f} (TP={tp} FP={fp} FN={fn} TN={tn})")
     return {"precision": precision, "recall": recall, "f1": f1, "tp": tp, "fp": fp, "fn": fn, "tn": tn}
 
-
-# ------------------------------------------------------------- previsione
 def _write_ramp(data_dir, robot_id, channel, start_ts_ms, start_value, rate_per_s, observed_duration_s, step_s=2):
     rows = []
     t = 0
@@ -105,7 +87,6 @@ def _write_ramp(data_dir, robot_id, channel, start_ts_ms, start_value, rate_per_
     os.makedirs(telemetry_dir, exist_ok=True)
     df.to_parquet(os.path.join(telemetry_dir, "part-0.parquet"), index=False)
 
-
 def _run_forecast(data_dir, now_ts_ms, lookback_s=300):
     out_dir = os.path.join(data_dir, "predictions")
     subprocess.run(
@@ -116,12 +97,10 @@ def _run_forecast(data_dir, now_ts_ms, lookback_s=300):
     files = glob.glob(os.path.join(out_dir, "*.parquet"))
     return pd.read_parquet(out_dir) if files else pd.DataFrame()
 
-
 def run_prediction_experiment(run_dir):
     print("== Previsione: errore lead time su trend sintetici noti ==")
     start_ts_ms = 1_800_000_000_000
     scenarios = [
-        # channel, start_value, rate_per_s, threshold_value, observed_duration_s
         ("motor_temp", 60.0, 0.05, 85.0, 400),
         ("motor_current", 3.0, 0.01, 4.5, 100),
         ("battery_pct", 50.0, -0.05, 10.0, 300),
@@ -156,16 +135,7 @@ def run_prediction_experiment(run_dir):
     mae = sum(valid_errors) / len(valid_errors) if valid_errors else None
     return {"mae_lead_time_s": mae, "scenarios": len(rows), "missing": sum(1 for r in rows if r["error_s"] is None)}
 
-
-# ------------------------------------------------------- previsione live
 def run_live_prediction_experiment(run_dir):
-    """Complementare a run_prediction_experiment (che valuta solo la
-    regressione offline di predictive/forecast_failures.py): qui si misura
-    il quarto operatore streaming di detection_job.py (soglia morbida,
-    "preavviso_intermittente"), sia come detection (precision/recall sulle
-    anomalie type=previsione) sia come latenza onset->previsione, stessa
-    tecnica di misura (e stesso limite: tempo di attesa fisso, non l'istante
-    esatto di arrivo) di run_efficiency.run_latency_trials."""
     print("== Previsione live: detection streaming + latenza onset->previsione ==")
     n_robots = 6
     faulty_idx = {0, 2, 4}
@@ -177,12 +147,6 @@ def run_live_prediction_experiment(run_dir):
         for i, rid in enumerate(robot_ids) if i in faulty_idx
     ]
 
-    # injected_faults riceve il record solo alla DISATTIVAZIONE del guasto
-    # (synthetic_generator.py, FaultInjector._deactivate), non all'avvio --
-    # con duration_s=60 aspettarlo qui triplicherebbe il tempo dell'esperimento
-    # per un dato che possiamo gia' calcolare: il generatore fa scattare i
-    # guasti pianificati sul proprio orologio interno a partire dall'istante
-    # di questa chiamata, quindi l'onset reale e' t_launch + start_time_s.
     anomaly_consumer = start_consumer("anomalies")
     t_launch = time.time()
     start_generator({"num_robots": n_robots, "hz": 3, "duration_s": 70, "robot_id_prefix": prefix, "faults": faults})
@@ -226,8 +190,6 @@ def run_live_prediction_experiment(run_dir):
     print(f"  precision={precision:.2f} recall={recall:.2f} f1={f1:.2f} (TP={tp} FP={fp} FN={fn} TN={tn}), latenza media onset->previsione {avg_latency}")
     return {"precision": precision, "recall": recall, "f1": f1, "tp": tp, "fp": fp, "fn": fn, "tn": tn, "avg_latency_s": avg_latency}
 
-
-# --------------------------------------------------------------------- TAG
 def row_matches(tag_row, gt_values, tol=0.5):
     tag_values = list(tag_row.values())
     for gv in gt_values:
@@ -239,14 +201,12 @@ def row_matches(tag_row, gt_values, tol=0.5):
                 return False
     return True
 
-
 def question_correct(ground_truth_rows, tag_rows):
     if not ground_truth_rows:
         return True
     if not tag_rows:
         return False
     return all(any(row_matches(tr, list(gr.values())) for tr in tag_rows) for gr in ground_truth_rows)
-
 
 def run_tag_experiment(run_dir):
     print(f"== TAG: execution accuracy su {len(REFERENCE_QUESTIONS)} domande di riferimento ==")
@@ -255,7 +215,7 @@ def run_tag_experiment(run_dir):
     for question, sql in REFERENCE_QUESTIONS:
         try:
             ground_truth = query_sql(sql)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             rows.append({"question": question, "reference_sql": sql, "correct": False, "error": f"verita' diretta fallita: {exc}"})
             continue
 
@@ -272,7 +232,7 @@ def run_tag_experiment(run_dir):
             "attempts": tag_result.get("attempts"), "correct": correct, "error": "",
         })
         print(f"  [{'OK' if correct else 'X '}] {question}")
-        time.sleep(1)  # non martellare il router HF
+        time.sleep(1)
 
     with open(os.path.join(run_dir, "tag_accuracy.csv"), "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["question", "reference_sql", "tag_sql", "attempts", "correct", "error"])
@@ -283,7 +243,6 @@ def run_tag_experiment(run_dir):
     accuracy = correct_count / len(REFERENCE_QUESTIONS) if REFERENCE_QUESTIONS else 0.0
     print(f"  accuracy: {correct_count}/{len(REFERENCE_QUESTIONS)} = {accuracy:.0%}")
     return {"accuracy": accuracy, "correct": correct_count, "total": len(REFERENCE_QUESTIONS)}
-
 
 def main():
     run_id, run_dir = new_run_dir("effectiveness")
@@ -300,7 +259,6 @@ def main():
     }
     update_index("effectiveness", run_id, summary)
     print(f"\nFatto. Risultati in {run_dir}")
-
 
 if __name__ == "__main__":
     main()

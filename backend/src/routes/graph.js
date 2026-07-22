@@ -5,9 +5,6 @@ import { Router } from "express";
 
 const CONFIG_DIR = process.env.CONFIG_DIR || "/workspace/config";
 
-// Preset di topologie per il generatore sintetico: "medium" e' il grafo
-// reale usato anche da ROS/Gazebo, "small"/"large" vivono solo in
-// config/presets/ e servono solo al carico sintetico.
 const PRESETS = {
   small: path.join(CONFIG_DIR, "presets", "warehouse_small.json"),
   medium: path.join(CONFIG_DIR, "warehouse_graph.json"),

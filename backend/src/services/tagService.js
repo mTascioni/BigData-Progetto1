@@ -8,7 +8,7 @@ import { runSql } from "./queryService.js";
 import { extractSql, validateSelectOnly } from "./sqlGuard.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MAX_RETRIES = 1; // solo SELECT + un retry sull'errore, non di piu'
+const MAX_RETRIES = 1;
 
 function loadCredentials() {
   const credPath = path.join(__dirname, "..", "config", "HuggingFace_credentials.json");
@@ -30,10 +30,6 @@ export function isConfigured() {
   return llm !== null;
 }
 
-// Terzo stadio del layer TAG (answer synthesis, vedi promptBuilder.js): una
-// chiamata in piu' allo stesso LLM/router, non un servizio nuovo. Se fallisce
-// (es. rate limit) non deve far fallire l'intera risposta -- l'utente vede
-// comunque righe/SQL, solo senza la frase in linguaggio naturale.
 async function synthesizeAnswer(question, sql, rows) {
   try {
     const messages = buildAnswerSynthesisMessages(question, sql, rows);

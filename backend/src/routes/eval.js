@@ -5,21 +5,12 @@ import { Router } from "express";
 
 import { getEvalStatus, startEvalRun } from "../services/evalService.js";
 
-// Risultati di eval/run_effectiveness.py e run_efficiency.py, scritti sul
-// volume Docker condiviso `shf-data` (stesso volume di telemetria/Parquet).
-// Il backend li monta in sola lettura e li serve alla dashboard -- niente
-// scrittura da qui, la producono solo gli script eval/.
 const EVAL_DIR = process.env.EVAL_DIR || "/data/eval";
 
-// solo caratteri "innocui": niente attraversamento di percorso verso il
-// resto del volume /data (telemetria, injected_faults, ...).
 const SAFE_SEGMENT = /^[A-Za-z0-9_.-]+$/;
 
 const router = Router();
 
-// Estensione "risultati live": la dashboard avvia il run qui invece di
-// lanciarlo a mano da CLI, e ne segue l'avanzamento con GET /status (vedi
-// eval_service.py, che pubblica ogni sotto-esperimento appena e' pronto).
 router.post("/run", async (req, res) => {
   const runType = req.body?.run_type;
   if (runType !== "effectiveness" && runType !== "efficiency") {
@@ -46,7 +37,7 @@ router.get("/results", (_req, res) => {
     const index = JSON.parse(fs.readFileSync(indexPath, "utf-8"));
     res.json(index);
   } catch {
-    res.json([]); // nessun run ancora eseguito: lista vuota, non un errore
+    res.json([]);
   }
 });
 

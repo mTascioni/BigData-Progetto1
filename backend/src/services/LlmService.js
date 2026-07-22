@@ -1,6 +1,3 @@
-// Client per il router di Hugging Face Inference Providers (API OpenAI-
-// compatibile). Stesso pattern usato in un altro progetto (chat/completions
-// con Bearer token), adattato a ES modules.
 export default class LlmService {
   constructor(apiKey, model) {
     this.apiKey = apiKey;

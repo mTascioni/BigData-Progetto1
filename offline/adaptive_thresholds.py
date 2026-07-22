@@ -1,20 +1,4 @@
 #!/usr/bin/env python3
-"""Calibra le soglie di salute (motor_temp/motor_current/battery_pct)
-sullo storico reale, per ridurre i falsi positivi.
-
-Usa `injected_faults` come ground truth per distinguere, fra le anomalie
-di tipo "salute" gia' scritte da detection_job.py, quelle vere (cadono
-dentro la finestra di un guasto reale) da quelle false. Per ogni canale
-con troppi falsi positivi, allarga la soglia fino a un percentile alto (o
-basso, per la batteria) dei valori osservati nei periodi NOMINALI (fuori
-da ogni finestra di guasto) -- cosi' il rumore nominale non la fa piu'
-scattare, senza bisogno di sapere a priori quanto rumore ci sia.
-
-Scrive /data/adaptive_thresholds.json. detection_job.py lo rilegge al
-prossimo avvio: e' il feedback verso lo streaming -- non hot-reload a
-caldo (fuori scopo per un job Spark gia' in esecuzione), ma calibrazione
-fra una run e la successiva.
-"""
 import argparse
 import glob
 import json
@@ -34,22 +18,15 @@ CHANNEL_TO_THRESHOLD_KEY = {
     "motor_current": "motor_current_threshold_a",
     "battery_pct": "battery_low_threshold_pct",
 }
-LOWER_BOUND_CHANNELS = {"battery_pct"}  # soglia "sotto" invece che "sopra"
+LOWER_BOUND_CHANNELS = {"battery_pct"}
 
 PERCENTILE_HIGH = 0.995
 PERCENTILE_LOW = 0.005
 
-
 def load_parquet_dir(path):
-    # pd.read_parquet su una directory (non sui singoli file) usa il
-    # dataset API di pyarrow e ricostruisce le colonne di partizione
-    # Hive-style (es. anomalies/type=salute/...) -- leggendo i file uno per
-    # uno quella colonna andrebbe persa, perche' Spark non la scrive dentro
-    # ai file quando partiziona.
     if not glob.glob(os.path.join(path, "**", "*.parquet"), recursive=True):
         return pd.DataFrame()
     return pd.read_parquet(path)
-
 
 def build_fault_windows(injected_faults):
     windows = {}
@@ -57,10 +34,8 @@ def build_fault_windows(injected_faults):
         windows.setdefault(f["robot_id"], []).append((f["start_ts"], f["end_ts"]))
     return windows
 
-
 def in_any_window(robot_id, ts, windows_by_robot):
     return any(start <= ts <= end for start, end in windows_by_robot.get(robot_id, []))
-
 
 def calibrate(telemetry, anomalies, injected_faults, min_false_positives):
     thresholds = dict(DEFAULT_THRESHOLDS)
@@ -120,7 +95,6 @@ def calibrate(telemetry, anomalies, injected_faults, min_false_positives):
 
     return thresholds, report
 
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default="/data")
@@ -143,7 +117,6 @@ def main():
 
     print(f"Soglie scritte in {args.out}:")
     print(json.dumps(payload, indent=2, ensure_ascii=False))
-
 
 if __name__ == "__main__":
     main()
