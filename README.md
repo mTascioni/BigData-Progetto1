@@ -60,7 +60,7 @@ I risultati (CSV) vengono salvati in `/data/eval/` sul volume condiviso.
 ### Fermare i container
 
 ```bash
-docker compose down       # ferma e rimuove i container (i dati persistiti su /data restano nel volume shf-data)
+docker compose down       # ferma e rimuove i container (i dati su /data restano nel volume shf-data)
 ```
 
 ## Struttura del progetto
