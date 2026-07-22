@@ -1,9 +1,9 @@
 """Verifica che un guasto iniettato dal generatore sintetico produca un
-record di ground truth corretto su injected_faults -- la base per
-precision/recall (CLAUDE.md: "ogni guasto iniettato va loggato in
-injected_faults"). Il generatore e' comodo per questo perche' i tempi sono
-controllati con precisione (a differenza di aspettare il fault_schedule
-fisso della simulazione ROS reale)."""
+record di ground truth corretto su injected_faults -- ogni guasto iniettato
+deve finire li', e' la base per calcolare precision/recall. Il generatore
+e' comodo per questo perche' i tempi sono controllati con precisione (a
+differenza di aspettare il fault_schedule fisso della simulazione ROS
+reale)."""
 import time
 
 from conftest import collect_messages, start_consumer, start_generator, wait_generator_done

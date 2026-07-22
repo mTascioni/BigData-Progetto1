@@ -1,13 +1,13 @@
 # Passo 13 — Valutazione sperimentale (EFFECTIVENESS + EFFICIENCY)
 
-**Obiettivo (da PLAN.md):** `eval/` — efficiency (scalabilità throughput/latency vs carico, punto di rottura, latenza onset→alert) ed effectiveness (detection precision/recall/F1 vs `injected_faults`, accuratezza previsione + lead time, execution accuracy del TAG).
+**Obiettivo:** `eval/` — efficiency (scalabilità throughput/latency vs carico, punto di rottura, latenza onset→alert) ed effectiveness (detection precision/recall/F1 vs `injected_faults`, accuratezza previsione + lead time, execution accuracy del TAG).
 **Deliverable atteso:** i numeri per il report.
 
-Ultimo passo del piano. Distinto da `test/` (Passo pre-13, suite pass/fail per verificare la correttezza — vedi `test/README.md`): qui si producono **numeri riusabili nella tesina**, non asserzioni vero/falso. Su richiesta esplicita dell'utente, i risultati sono anche visualizzati in un pannello dedicato in fondo alla dashboard (non nella vista principale, per non intralciarla). Dal 2026-07-21 il pannello lancia i run **on-demand** e ne mostra i risultati **davvero in diretta**, sotto-esperimento per sotto-esperimento man mano che finiscono (vedi "Estensione: risultati live" più sotto) — la versione originale mostrava solo l'ultimo run già completato, con grafici PNG pre-generati e un refresh a polling ogni 30s.
+Ultimo passo del piano. Distinto da `test/` (Passo pre-13, suite pass/fail per verificare la correttezza — vedi `test/README.md`): qui si producono **numeri riusabili nella tesina**, non asserzioni vero/falso. I risultati sono anche visualizzati in un pannello dedicato in fondo alla dashboard (non nella vista principale, per non intralciarla). Dal 2026-07-21 il pannello lancia i run **on-demand** e ne mostra i risultati **davvero in diretta**, sotto-esperimento per sotto-esperimento man mano che finiscono (vedi "Estensione: risultati live" più sotto) — la versione originale mostrava solo l'ultimo run già completato, con grafici PNG pre-generati e un refresh a polling ogni 30s.
 
 ## Cosa è stato costruito
 
-**`eval/common.py`** — helper condivisi (stesso stile di `test/conftest.py`: client Kafka, `query_sql`/`ask_tag` verso i servizi, controllo del generatore). In più: `new_run_dir(tipo)` crea una cartella `/data/eval/<tipo>_<timestamp>/` sul volume Docker condiviso `shf-data` (stesso volume di telemetria/Parquet — CLAUDE.md, storage su volume condiviso), `update_index(...)` che aggiorna un indice condiviso `/data/eval/index.json` letto dal backend, `json_safe(...)` che sanifica `NaN`/`Infinity` prima di scrivere JSON (vedi "Estensione: risultati live").
+**`eval/common.py`** — helper condivisi (stesso stile di `test/conftest.py`: client Kafka, `query_sql`/`ask_tag` verso i servizi, controllo del generatore). In più: `new_run_dir(tipo)` crea una cartella `/data/eval/<tipo>_<timestamp>/` sul volume Docker condiviso `shf-data` (stesso volume di telemetria/Parquet — lo storage vive tutto su volume condiviso), `update_index(...)` che aggiorna un indice condiviso `/data/eval/index.json` letto dal backend, `json_safe(...)` che sanifica `NaN`/`Infinity` prima di scrivere JSON (vedi "Estensione: risultati live").
 
 **`eval/reference_questions.py`** — 22 domande di riferimento in linguaggio naturale con la relativa query SQL "di verità diretta" scritta a mano (stesso principio di `test/test_tag_accuracy.py`: la verità si ricalcola sugli stessi dati al momento della domanda, niente valori attesi fissi che scadrebbero appena lo storico cresce).
 
@@ -26,7 +26,7 @@ Ultimo passo del piano. Distinto da `test/` (Passo pre-13, suite pass/fail per v
 
 ## Estensione: risultati live (2026-07-21)
 
-Su richiesta esplicita dell'utente ("vorrei creare dei risultati lì per lì, visualizzandoli in diretta... elimina i risultati statici"): il pannello non legge più un `index.json` aggiornato ogni 30s con PNG pre-generati, lancia il run e ne segue l'avanzamento in tempo reale.
+Per mostrare i risultati mentre vengono prodotti invece che a run già concluso: il pannello non legge più un `index.json` aggiornato ogni 30s con PNG pre-generati, lancia il run e ne segue l'avanzamento in tempo reale.
 
 - **`eval/eval_service.py`** (nuovo): servizio HTTP nel container `ros` (porta 5003, stesso pattern di `generator_service.py`/Passo 12 e `fleet_control_service.py`/Passo 14: `http.server` nativo, un nodo/processo persistente avviato da supervisord). `POST /run {run_type}` avvia in un thread la sequenza di sotto-esperimenti già definita in `run_effectiveness.py`/`run_efficiency.py` (le stesse funzioni, importate e richiamate direttamente — non un `subprocess`), pubblicando il risultato di ciascuno in uno stato condiviso non appena pronto; `GET /status` lo espone. Un solo run alla volta (secondo tentativo → `409`).
 - **`backend/src/services/evalService.js`** + due nuove route in `routes/eval.js` (`POST /run`, `GET /status`) fanno da proxy verso `eval_service.py`, stesso schema di `fleetControlService.js`.
@@ -79,4 +79,4 @@ Oppure, dalla dashboard: bottone "Esegui ora" nella card corrispondente (nessun 
 
 ## Chiusura del piano
 
-Con questo passo si chiudono tutti e 13 i passi di `PLAN.md`. Le quattro tecnologie richieste dal corso (Kafka, Spark Structured Streaming, previsione time-series, LLM) sono tutte presenti e verificate; entrambe le categorie di esperimenti richieste (effectiveness, efficiency) hanno numeri reali, riproducibili con un comando, visibili sia da riga di comando (CSV) sia dalla dashboard.
+Con questo passo si chiudono tutti e 13 i passi del piano originale. Le quattro tecnologie richieste dal corso (Kafka, Spark Structured Streaming, previsione time-series, LLM) sono tutte presenti e verificate; entrambe le categorie di esperimenti richieste (effectiveness, efficiency) hanno numeri reali, riproducibili con un comando, visibili sia da riga di comando (CSV) sia dalla dashboard.

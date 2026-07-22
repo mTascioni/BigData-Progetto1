@@ -1,6 +1,6 @@
 # Passo 3 — Bring-up ROS/Gazebo (de-rischia subito)
 
-**Obiettivo (da PLAN.md):** un **singolo** TurtleBot3 in Gazebo (Noetic), headless, che naviga sul grafo mandando goal nodo per nodo (`move_base`). Verifica posa/odometria/lidar.
+**Obiettivo:** un **singolo** TurtleBot3 in Gazebo (Noetic), headless, che naviga sul grafo mandando goal nodo per nodo (`move_base`). Verifica posa/odometria/lidar.
 **Deliverable atteso:** un robot che si muove sul grafo e pubblica sui topic ROS.
 
 ## Cosa è stato costruito
@@ -14,7 +14,7 @@ Un pacchetto catkin `shf_bringup` (in `ros/catkin_ws/src/shf_bringup/`, copiato 
 
 ## Scelte tecniche e motivazioni
 
-**Nessuna mappa statica, nessun AMCL/SLAM.** Il grafo del magazzino (Passo 2) è un roadmap **logico**, non una mappa metrica delle pareti: `CLAUDE.md` descrive i robot che "seguono la roadmap" e mappano `(x,y)` sull'arco occupato, non che debbano localizzarsi rispetto a ostacoli reali. Costruire/salvare una mappa via SLAM per poi fare AMCL sarebbe lavoro extra non richiesto da questo passo (il progetto è di Big Data, non di robotica — vedi invariante in `CLAUDE.md`). Scelta: `global_costmap` senza `static_layer`, frame `odom`, dimensione fissa abbastanza grande da coprire tutto il magazzino; il robot si fida della propria odometria (accurata in simulazione). `move_base` pianifica ed evita ostacoli dinamici rilevati dal lidar tramite `obstacle_layer`/`inflation_layer`, sufficiente per un solo robot in un mondo vuoto.
+**Nessuna mappa statica, nessun AMCL/SLAM.** Il grafo del magazzino (Passo 2) è un roadmap **logico**, non una mappa metrica delle pareti: i robot seguono la roadmap e mappano `(x,y)` sull'arco occupato, non devono localizzarsi rispetto a ostacoli reali. Costruire/salvare una mappa via SLAM per poi fare AMCL sarebbe lavoro extra non richiesto da questo passo (il progetto è di Big Data, non di robotica). Scelta: `global_costmap` senza `static_layer`, frame `odom`, dimensione fissa abbastanza grande da coprire tutto il magazzino; il robot si fida della propria odometria (accurata in simulazione). `move_base` pianifica ed evita ostacoli dinamici rilevati dal lidar tramite `obstacle_layer`/`inflation_layer`, sufficiente per un solo robot in un mondo vuoto.
 
 **Mondo Gazebo vuoto, nessuna parete fisica lungo il grafo.** Le "corsie singole" (`capacity: 1`) del grafo sono un vincolo *logico* che verrà fatto rispettare dalla logica applicativa (detection deadlock/livelock, Passo 7), non da muri fisici in Gazebo. Costruire una geometria 3D fedele al grafo non è necessario per il deliverable di questo passo ("un robot che si muove e pubblica sui topic") e avrebbe aggiunto complessità (modellazione, collisioni) senza valore per gli obiettivi Big Data del progetto.
 

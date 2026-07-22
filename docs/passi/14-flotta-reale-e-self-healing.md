@@ -1,14 +1,12 @@
 # Passo 14 — Flotta reale in un magazzino fisico, guasti live, self healing vero (estensione oltre i 13 passi)
 
-**Non è un passo del piano originale.** Nasce da una richiesta esplicita dell'utente per una demo dal vivo al professore: mostrare comportamento "normale" e guasti su robot ROS/Gazebo **veri** (pochi, ma reali), con la possibilità di iniettare un guasto in diretta su un robot reale (dentro il topic `telemetry` vero, non un canale a parte — altrimenti il modello di detection non servirebbe a niente), e vedere il sistema reagire davvero: il robot guasto va in riparazione, un secondo robot tenuto di riserva ne prende in carico la missione.
-
-Piano completo, incluse le decisioni di scope prese con l'utente (AskUserQuestion) prima di partire: `/home/marcello/.claude/plans/agile-spinning-corbato.md`.
+**Non è un passo del piano originale.** Nasce dall'esigenza di una demo dal vivo al professore: mostrare comportamento "normale" e guasti su robot ROS/Gazebo **veri** (pochi, ma reali), con la possibilità di iniettare un guasto in diretta su un robot reale (dentro il topic `telemetry` vero, non un canale a parte — altrimenti il modello di detection non servirebbe a niente), e vedere il sistema reagire davvero: il robot guasto va in riparazione, un secondo robot tenuto di riserva ne prende in carico la missione.
 
 ## Perché
 
 Fino al Passo 13 il "magazzino" esisteva solo come grafo logico (`config/warehouse_graph.json`): Gazebo era un mondo vuoto, `capacity=1` sui due choke point (C-F, C-H) era solo un numero nel JSON senza alcuna geometria fisica a farlo rispettare. Deadlock/livelock sulla flotta reale non erano mai stati osservati per davvero (il conflitto trovato al Passo 5 fu un incidente di scheduling, non i choke point). I guasti sui robot reali erano solo pre-schedulati in `config/experiment.json`, letti una volta sola all'avvio — niente di interattivo, niente di dimostrabile "a comando" davanti a un pubblico.
 
-## Decisioni di scope (confermate con l'utente)
+## Decisioni di scope
 
 - **Grafo**: riusato quello esistente, nessun cambio di topologia — solo due "tunnel" di pareti Gazebo sui choke point già pensati per questo (Passo 2).
 - **Guasti che fermano il robot**: qualsiasi anomalia di salute rilevata (all'inizio implementato su `health_anomaly` di `fleet_state`, poi rivisto — vedi "Il falso positivo dell'Isolation Forest" più sotto) — non una whitelist di guasti "gravi".
@@ -95,6 +93,6 @@ Passando allo scenario `large` (8 robot) per estendere la demo, la prima version
 - `backend/src/server.js` — nuova route `/api/fleet-control`.
 - `dashboard/{index.html,style.css,app.js}` — card "Flotta reale — controllo".
 - `docker-compose.yml` — porta 5002, env `FLEET_CONTROL_SERVICE_URL`.
-- `CLAUDE.md` — nuovo invariante che documenta l'eccezione deliberata al "solo diagnosi".
+- Documentazione di progetto aggiornata con l'eccezione deliberata al "solo diagnosi".
 
 **Aggiornamento (2026-07-21)**: `fleet_control_service.py` esteso con `/sim/start`, `/sim/stop`, `/sim/status` — la simulazione ROS/Gazebo non parte più in automatico all'avvio dello stack, va avviata dalla dashboard scegliendo la scala. Dettagli in `docs/passi/01-scaffold-infrastruttura.md` (sezione "La simulazione ROS non parte più da sola").

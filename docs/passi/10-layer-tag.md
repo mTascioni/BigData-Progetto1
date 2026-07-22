@@ -1,9 +1,9 @@
 # Passo 10 — Layer TAG (text-to-SQL, LLM)
 
-**Obiettivo (da PLAN.md):** endpoint Node: prompt (schema intero + few-shot) → Qwen su HuggingFace → SQL → esecuzione sui Parquet → righe. Guardia: solo `SELECT` + retry sull'errore. ~20-30 domande di riferimento per la valutazione.
+**Obiettivo:** endpoint Node: prompt (schema intero + few-shot) → Qwen su HuggingFace → SQL → esecuzione sui Parquet → righe. Guardia: solo `SELECT` + retry sull'errore. ~20-30 domande di riferimento per la valutazione.
 **Deliverable atteso:** "chiedi a parole → risposta dai dati".
 
-Quarta e ultima delle tecnologie richieste dal corso (Kafka, Spark, previsione time-series, LLM — tutte e quattro presenti a questo punto). Rispetto al piano originale in `CLAUDE.md`, due decisioni prese insieme all'utente prima di implementare, discusse in conversazione:
+Quarta e ultima delle tecnologie richieste dal corso (Kafka, Spark, previsione time-series, LLM — tutte e quattro presenti a questo punto). Rispetto al piano originale, due decisioni prese prima di implementare:
 
 1. **Niente DuckDB.** Il piano originale prevedeva `duckdb` (libreria Node embeddable) per eseguire l'SQL generato direttamente nel backend. Deciso di sostituirlo con **Spark SQL**, riusando il cluster già in piedi dai Passi 7-9 invece di aggiungere un nuovo motore. Il backend Node non esegue più l'SQL da solo: chiama un piccolo servizio Spark dedicato (`query_service.py`) via HTTP interno.
 2. **Qwen-Coder via il router di Hugging Face (Inference Providers), non self-hosted.** Il piano non specificava se ospitare il modello in locale o chiamarlo via API. Scelto di riusare esattamente il pattern già rodato in un altro progetto dell'utente (endpoint `https://router.huggingface.co/v1/chat/completions`, formato OpenAI-compatibile, Bearer token) — evita di dover gestire GPU/quantizzazione/`nvidia-container-toolkit` nel container, molto più leggero e riproducibile. Modello usato: `Qwen/Qwen2.5-Coder-32B-Instruct:fastest` (verificato disponibile tramite gli Inference Providers, provider Nscale al momento).
@@ -58,11 +58,11 @@ Il layer TAG (questo passo) vive interamente nel **serving layer**: interroga so
 
 **`backend/src/services/sqlGuard.js`** — `extractSql` (ripulisce eventuali blocchi markdown che il modello potrebbe comunque aggiungere) e `validateSelectOnly` (stessa logica lato Node, prima ancora di contattare `query_service`).
 
-**`backend/src/services/tagService.js`** — orchestra il ciclo: prompt → LLM → guardia → esecuzione; se la guardia rifiuta la query o l'esecuzione fallisce, **un retry** (PLAN.md: "guardia + retry sull'errore"), ri-prompting il modello con l'errore ricevuto, poi restituisce il risultato o l'errore finale.
+**`backend/src/services/tagService.js`** — orchestra il ciclo: prompt → LLM → guardia → esecuzione; se la guardia rifiuta la query o l'esecuzione fallisce, **un retry**, ri-prompting il modello con l'errore ricevuto, poi restituisce il risultato o l'errore finale.
 
 **`backend/src/routes/tag.js` + `server.js`** — `POST /api/tag { "question": "..." }`.
 
-**Credenziali**: `backend/src/config/HuggingFace_credentials.json` (gitignored, con un file `.example.json` committato come template) — per ora usa **lo stesso token** del progetto di riferimento dell'utente (deciso esplicitamente: "intanto usiamo lo stesso token, poi dopo ci penso io a modificare"), da sostituire con un token dedicato quando l'utente vorrà.
+**Credenziali**: `backend/src/config/HuggingFace_credentials.json` (gitignored, con un file `.example.json` committato come template) — per ora riusa **lo stesso token** di un altro progetto di riferimento, da sostituire con un token dedicato in seguito.
 
 ## Problema incontrato: worker Spark disconnesso dal master
 
@@ -109,7 +109,7 @@ docker exec -d shf-spark-master bash -c "
 
 ## Aggiornamento (2026-07-21): il terzo stadio mancante — da text-to-SQL a TAG vero
 
-L'utente ha chiesto se fosse corretto chiamare questo layer "TAG", o se fosse un'etichetta troppo ambiziosa per quello che il codice faceva davvero. Risposta onesta dopo aver riletto `tagService.js`/`dashboard/app.js`: **no**, non lo era. La definizione di TAG (Biswal et al., *"TAG: A Unified Framework for Table-Augmented Generation"*, 2024) richiede tre stadi — query synthesis, query execution, **answer synthesis** (l'LLM rielabora le righe in una risposta) — e questo layer si fermava al secondo: restituiva SQL generato e righe grezze in una tabella HTML, senza alcuna rielaborazione. Un vero sistema di text-to-SQL, non di TAG, nonostante fosse già chiamato "TAG" sia qui sia in `PLAN.md` — un'imprecisione di terminologia presente fin dal Passo 10 originale, non introdotta ora.
+Vale la pena chiedersi se fosse corretto chiamare questo layer "TAG", o se fosse un'etichetta troppo ambiziosa per quello che il codice faceva davvero. Risposta onesta dopo aver riletto `tagService.js`/`dashboard/app.js`: **no**, non lo era. La definizione di TAG (Biswal et al., *"TAG: A Unified Framework for Table-Augmented Generation"*, 2024) richiede tre stadi — query synthesis, query execution, **answer synthesis** (l'LLM rielabora le righe in una risposta) — e questo layer si fermava al secondo: restituiva SQL generato e righe grezze in una tabella HTML, senza alcuna rielaborazione. Un vero sistema di text-to-SQL, non di TAG, nonostante fosse già chiamato "TAG" fin dal piano originale — un'imprecisione di terminologia presente dall'inizio, non introdotta ora.
 
 Aggiunto lo stadio mancante:
 - **`backend/src/services/promptBuilder.js`** — nuova `buildAnswerSynthesisMessages(question, sql, rows)`: prompt con domanda + SQL eseguita + righe risultato (troncate a 30 per non gonfiare il prompt, con avviso esplicito se il totale è maggiore), istruzione esplicita di rispondere solo in base ai dati forniti e di dichiarare "nessun risultato" invece di inventare (mitigazione diretta del rischio di allucinazione).

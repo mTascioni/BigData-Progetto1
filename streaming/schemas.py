@@ -1,7 +1,7 @@
 """Schemi Spark condivisi fra i job di streaming (detection_job.py,
 persistence_job.py) per i messaggi JSON sui topic Kafka. Un solo posto
-dove tenerli allineati allo schema di CLAUDE.md e ai payload prodotti da
-kafka_bridge.py / detection_job.py.
+dove tenerli allineati ai payload prodotti da kafka_bridge.py /
+detection_job.py.
 """
 from pyspark.sql.types import (
     ArrayType, DoubleType, IntegerType, LongType, StringType,

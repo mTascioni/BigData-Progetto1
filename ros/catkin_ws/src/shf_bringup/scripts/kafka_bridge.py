@@ -2,8 +2,9 @@
 """Nodo-ponte ROS -> Kafka.
 
 Si sottoscrive ai topic ROS di un robot, compone il messaggio di telemetria
-nello schema condiviso (CLAUDE.md), sintetizzando i canali di salute
-(nominale + rumore) e mappando la posizione sull'arco del grafo piu' vicino.
+nello schema condiviso con generator/synthetic_generator.py, sintetizzando i
+canali di salute (nominale + rumore) e mappando la posizione sull'arco del
+grafo piu' vicino.
 Pubblica su Kafka, topic `telemetry`, partizionato per robot_id (message key
 = robot_id). Applica anche il `fault_schedule` di config/experiment.json
 (layer di fault injection): quando un guasto e' attivo per questo robot, la
@@ -86,8 +87,8 @@ def nearest_node(node_pos, x, y):
 
 def nearest_edge(edges, node_pos, x, y):
     """Proietta (x, y) su ciascun arco (segmento tra i due nodi, clampato) e
-    restituisce l'id dell'arco con distanza minima -- '(x,y) mappato
-    sull'arco occupato', invariante di CLAUDE.md."""
+    restituisce l'id dell'arco con distanza minima: (x,y) va mappato
+    sull'arco occupato, non solo sul nodo piu' vicino."""
     best_id, best_dist = None, float("inf")
     for e in edges:
         x1, y1 = node_pos[e["from"]]

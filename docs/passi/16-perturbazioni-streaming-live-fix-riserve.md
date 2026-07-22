@@ -12,7 +12,7 @@
 
 ## Decisioni di scope
 
-- **"Perturbazione" ≠ "guasto"**: chiarito con l'utente (non era ovvio dal solo termine) — rumore gaussiano extra su un canale, non una firma di guasto strutturata. Deliberatamente **esclusa da `injected_faults`** (ground truth): se ci finisse, `offline/adaptive_thresholds.py` la conterebbe come guasto vero invece che come il falso positivo che deve imparare a filtrare.
+- **"Perturbazione" ≠ "guasto"**: distinzione da tenere chiara (non ovvia dal solo termine) — rumore gaussiano extra su un canale, non una firma di guasto strutturata. Deliberatamente **esclusa da `injected_faults`** (ground truth): se ci finisse, `offline/adaptive_thresholds.py` la conterebbe come guasto vero invece che come il falso positivo che deve imparare a filtrare.
 - **Streaming live campionato, non esaustivo**: telemetry da sola può arrivare a centinaia di msg/s (Passo 12); il pannello serve a "vedere cosa passa", non a processare tutto — throttle a monte (backend) a un messaggio ogni ~200ms per topic, nessuna persistenza (buffer solo client-side, scartato al refresh).
 - **Fix mirati, non un redesign**: i tre bug hanno cause diverse (stato in memoria non resettato, random walk del generatore, dato di test non ripulito) — corretti singolarmente invece di un meccanismo unificato.
 
@@ -72,4 +72,4 @@ Causa più profonda: il pannello leggeva **solo** le previsioni offline batch (`
 - `backend/src/server.js` — wiring del nuovo consumer/websocket.
 - `dashboard/{index.html,app.js,style.css}` — form perturbazioni, pannello streaming live, merge previsioni live in "Robot a rischio", opzione mancante `preavviso_intermittente` nei menu guasti.
 - Dati: rimossi gli artefatti di test `predictions_20260722T105858.parquet`/`part-predtest.parquet` da `/data`.
-- `CLAUDE.md`, `PLAN.md` — nuova voce di piano.
+- Documentazione di progetto aggiornata con la nuova voce di piano.

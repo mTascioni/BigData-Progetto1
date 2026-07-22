@@ -8,7 +8,7 @@ import { runSql } from "./queryService.js";
 import { extractSql, validateSelectOnly } from "./sqlGuard.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MAX_RETRIES = 1; // PLAN.md: "Guardia: solo SELECT + retry sull'errore" -- un solo retry
+const MAX_RETRIES = 1; // solo SELECT + un retry sull'errore, non di piu'
 
 function loadCredentials() {
   const credPath = path.join(__dirname, "..", "config", "HuggingFace_credentials.json");

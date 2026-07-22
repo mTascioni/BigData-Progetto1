@@ -6,8 +6,8 @@ Gazebo non arriva a volumi di decine di migliaia di messaggi/s: qui i robot
 sono semplici "token" che percorrono il grafo del magazzino (stessa fonte di
 verita' di config/warehouse_graph.json, o un preset alternativo -- vedi
 config/presets/) senza fisica/ROS/Gazebo, producendo pero' messaggi che
-rispettano **esattamente lo stesso schema di telemetria** di kafka_bridge.py
-(CLAUDE.md e' l'unica fonte di verita' per lo schema).
+rispettano **esattamente lo stesso schema di telemetria** di kafka_bridge.py,
+mai duplicato altrove.
 
 Supporta anche l'iniezione di guasti (stesso fault_schedule/firme di
 kafka_bridge.py): utile per generare ground truth in injected_faults anche

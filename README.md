@@ -2,7 +2,48 @@
 
 Progetto Big Data (corso Big Data, Roma Tre, 2026): ingestione continua di telemetria da una flotta di AGV (TurtleBot3 in ROS/Gazebo), detection real-time delle anomalie (salute + deadlock/livelock) con Spark Structured Streaming, previsione offline dei guasti, interrogazione in linguaggio naturale (layer TAG: NL → SQL → esecuzione su Spark SQL → risposta sintetizzata) e dashboard live.
 
-Dettagli completi: [`CLAUDE.md`](CLAUDE.md) (schema dati, stack, invarianti) e [`PLAN.md`](PLAN.md) (i 13 passi del piano, più tre estensioni — Passo 14, flotta reale e self healing; Passo 15, previsione live e deposito; Passo 16, perturbazioni reattive e streaming live in dashboard — con link alla documentazione dettagliata di ciascuna in [`docs/passi/`](docs/passi/)).
+Documentazione tecnica completa nella relazione ([`docs/relazione/relazione.pdf`](docs/relazione/relazione.pdf)); lo sviluppo passo per passo, con le scelte e i problemi incontrati, è in [`docs/passi/`](docs/passi/).
+
+## Regole del progetto
+
+- **Lo schema del messaggio di telemetria è l'unica fonte di verità**: ogni componente (nodo-ponte ROS, generatore sintetico, job Spark, storage, layer TAG) si conforma allo stesso contratto — vedi sotto.
+- **La sorgente dati è ROS + Gazebo + TurtleBot3**: il generatore sintetico serve solo per gli esperimenti di scalabilità, non sostituisce la pipeline reale.
+- **I canali di salute** (`motor_temp`, `motor_current`, `battery_pct`) non esistono nel TurtleBot3 simulato: sono sintetizzati nel nodo-ponte a partire da parametri nominali configurabili.
+- **Ogni guasto iniettato è loggato in `injected_faults`**: è la ground truth su cui si calcolano precision/recall.
+- **`run_id`** isola i dati fra run diverse dello stesso robot-token (il generatore sintetico riusa gli stessi id ad ogni run).
+- **L'anello di self healing sulla flotta reale** (riparazione preventiva su previsione, freeze su guasto persistente confermato) è cablato solo sui robot ROS reali, non sul generatore sintetico.
+
+Schema del messaggio di telemetria (JSON, un tick per robot, topic Kafka `telemetry`):
+
+```json
+{
+  "ts": 1721400000000,
+  "robot_id": "R3",
+  "run_id": "a1b2c3d4",
+  "x": 12.4, "y": 3.1, "theta": 1.57,
+  "v_lin": 0.22, "v_ang": 0.0,
+  "cmd_v_lin": 0.25, "cmd_v_ang": 0.0,
+  "battery_pct": 74.0, "motor_current": 1.8, "motor_temp": 41.5,
+  "min_obstacle_dist": 0.9,
+  "task_state": "moving",
+  "current_edge": "C-F",
+  "goal_node": "H"
+}
+```
+
+`task_state` ∈ {`idle`, `moving`, `blocked`, `charging`}.
+
+## Copertura dei requisiti del corso (Topic 7 — IoT Stream Analytics)
+
+| Requisito | Dove è coperto |
+|---|---|
+| Ingest di stream continui da sensori | Telemetria TurtleBot3 → nodo-ponte ROS → Kafka |
+| Real-time analytics | Detection in Spark Structured Streaming |
+| Offline analytics su storico → analisi predittiva | Previsione time-series dei guasti (regressione lineare) |
+| Kafka / Spark streaming | Ingestion / Structured Streaming |
+| Prediction algorithms su time series | Regressione lineare sul trend dei canali di salute |
+| LLM (open source) | Layer TAG (text-to-SQL) con Qwen2.5-Coder-32B via router Hugging Face |
+| Esperimenti: effectiveness + efficiency | `eval/`, pannello dedicato in dashboard |
 
 ## Struttura del progetto
 
@@ -17,8 +58,8 @@ predictive/              # previsione offline dei guasti (regressione lineare)
 backend/                 # Node/Express: serve la dashboard, endpoint TAG, websocket
 dashboard/               # frontend (HTML + canvas 2D + JS), nessun framework
 test/                    # suite pytest: verifica di correttezza (schema, ground truth, precision/recall, ...)
-eval/                    # esperimenti del Passo 13: numeri/grafici per la tesina
-docs/passi/               # documentazione dettagliata di ogni passo del piano (scelte, problemi, verifica)
+eval/                    # esperimenti di valutazione sperimentale: numeri/grafici per la relazione
+docs/passi/               # documentazione dettagliata dello sviluppo (scelte, problemi, verifica)
 ```
 
 ## Prerequisiti
@@ -36,7 +77,7 @@ cd self-healing-fleet
 
 ## Configurazione (prima del primo avvio)
 
-Il layer TAG (query synthesis + answer synthesis, Passo 10) chiama un LLM (Qwen2.5-Coder-32B-Instruct) tramite il router **Inference Providers** di Hugging Face — serve un token API valido:
+Il layer TAG (query synthesis + answer synthesis) chiama un LLM (Qwen2.5-Coder-32B-Instruct) tramite il router **Inference Providers** di Hugging Face — serve un token API valido:
 
 1. Crea un token su https://huggingface.co/settings/tokens (basta un account gratuito; permessi di sola lettura/inference sono sufficienti, non serve un token con permessi di scrittura).
 2. Copia il file di esempio e inserisci il **tuo** token al posto del segnaposto:
@@ -87,7 +128,7 @@ curl -s http://localhost:5002/health                # fleet_control_service (gua
 
 Per una verifica più a fondo (schema dei messaggi, precision/recall della detection, accuratezza delle previsioni, execution accuracy del TAG): [`test/README.md`](test/README.md).
 
-## Esperimenti (Passo 13)
+## Esperimenti
 
 Dalla dashboard (in fondo alla pagina, card "Risultati sperimentazioni"): bottone "Esegui ora" per effectiveness (precision/recall detection, errore previsione, accuratezza TAG) o efficiency (throughput, latenza) — i risultati compaiono man mano che ogni sotto-esperimento finisce, nessun comando manuale necessario. La simulazione ROS reale (se l'hai avviata) non va fermata: gli esperimenti usano il generatore sintetico, non la flotta reale.
 

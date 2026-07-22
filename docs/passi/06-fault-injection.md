@@ -1,6 +1,6 @@
 # Passo 6 — Layer di fault injection
 
-**Obiettivo (da PLAN.md):** nel nodo-ponte, leggere il `fault_schedule` e, per un robot con guasto di salute attivo, sommare la firma alla telemetria prima di pubblicare. Loggare in `injected_faults`.
+**Obiettivo:** nel nodo-ponte, leggere il `fault_schedule` e, per un robot con guasto di salute attivo, sommare la firma alla telemetria prima di pubblicare. Loggare in `injected_faults`.
 **Deliverable atteso:** guasti controllati + ground truth.
 
 ## Cosa è stato costruito

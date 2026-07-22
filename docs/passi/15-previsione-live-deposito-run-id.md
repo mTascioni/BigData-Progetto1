@@ -1,18 +1,18 @@
 # Passo 15 — Previsione live, reazione differenziata, isolamento run, deposito (estensione oltre il piano originale)
 
-**Non è un passo del piano originale.** Nasce da cinque osservazioni concrete dell'utente dopo aver usato il sistema (flotta reale + generatore sintetico insieme), verificate una per una nel codice prima di intervenire — non ipotesi.
+**Non è un passo del piano originale.** Nasce da cinque osservazioni concrete emerse usando il sistema (flotta reale + generatore sintetico insieme), verificate una per una nel codice prima di intervenire — non ipotesi.
 
 ## Perché
 
 1. Il generatore sintetico produceva moltissimi falsi positivi di livelock (fino a 50 in 120s) mentre la flotta reale quasi mai.
-2. La previsione dei guasti (Passo 9) è uno script batch offline, non un segnale in streaming — l'utente voleva un preavviso live (raffiche saltuarie, non un guasto pieno) che attivasse una riparazione preventiva, con una reazione diversa per un guasto persistente reale (il robot si ferma, l'operatore lo rimuove).
+2. La previsione dei guasti (Passo 9) è uno script batch offline, non un segnale in streaming — mancava un preavviso live (raffiche saltuarie, non un guasto pieno) che attivasse una riparazione preventiva, con una reazione diversa per un guasto persistente reale (il robot si ferma, l'operatore lo rimuove).
 3. Per iniettare un guasto sul generatore serviva scrivere a mano il codice del robot.
 4. Non c'era modo di isolare i dati di una simulazione dalla successiva — `robot_id` viene riusato ad ogni run del generatore sintetico.
 5. `repair_node`/`reserve_node` coincidevano con lo `start_node` di robot reali (R1, R4): un robot riparato o rimesso in servizio collideva fisicamente con un robot ancora in servizio.
 
 ## Decisioni di scope
 
-- **Isolamento dati: `run_id`, non cancellazione fisica** (scelta con l'utente): più coerente con lo spirito "Big Data" (i dati grezzi non si cancellano mai), implementato end-to-end (schema, generatore, flotta reale, `persistence_job.py`, `forecast_failures.py`, query delle previsioni) — non solo un tag sui messaggi ignorato a valle.
+- **Isolamento dati: `run_id`, non cancellazione fisica**: più coerente con lo spirito "Big Data" (i dati grezzi non si cancellano mai), implementato end-to-end (schema, generatore, flotta reale, `persistence_job.py`, `forecast_failures.py`, query delle previsioni) — non solo un tag sui messaggi ignorato a valle.
 - **Fix del livelock, non sostituzione**: il rilevatore esistente (distanza-dal-goal, `applyInPandasWithState`) resta — corretto il bug specifico (confronto fra distanze verso goal diversi), non buttato via per uno più semplice basato su posizione statica. Preserva i numeri già documentati al Passo 13.
 - **Reazione differenziata**: una previsione (preavviso, non ancora un guasto) attiva la stessa riparazione preventiva + dispaccio riserva di prima; un guasto persistente confermato (soglia dura) ferma il robot invece di ripararlo in automatico — è già troppo tardi per una manovra preventiva, serve l'operatore.
 - **Decommissioning v1**: il robot sparisce da dashboard/pool riserve, non vengono terminati i processi ROS del suo namespace (nessun controllo per-robot esiste in `fleet_control_service.py`, sarebbe un lavoro a parte). Solo per la flotta reale — la rimozione di un singolo robot sintetico non è coperta (fermare l'intero run resta la via per "ripulire" la mappa sintetica).
@@ -79,4 +79,4 @@ Nuovo campo (nullable) in `TELEMETRY_SCHEMA`/`ANOMALIES_SCHEMA`/`INJECTED_FAULTS
 - `predictive/forecast_failures.py` — isolamento per `run_id`.
 - `backend/src/services/{anomalyStream,fleetStateStore,fleetControlService}.js`, `backend/src/routes/{fleetControl,predictions}.js` — `onPrevisione`, reazione differenziata, `decommissionRobot`, fix `pickAvailableReserve`, fix ri-comparsa robot decommissionato.
 - `dashboard/{index.html,app.js,style.css}` — menù a tendina generatore, stato "in avaria", bottone decommissiona, badge `run_id`.
-- `CLAUDE.md`, `PLAN.md` — nuove invarianti e voce di piano.
+- Documentazione di progetto aggiornata con le nuove regole e la voce di piano.

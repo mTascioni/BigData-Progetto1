@@ -1,9 +1,9 @@
 # Passo 2 — Contratti dati
 
-**Obiettivo (da PLAN.md):** `config/warehouse_graph.json` (magazzino piccolo con almeno un corridoio a corsia singola) e `config/experiment.json` (flotta, scenari, `fault_schedule`). Fissa lo schema del messaggio.
+**Obiettivo:** `config/warehouse_graph.json` (magazzino piccolo con almeno un corridoio a corsia singola) e `config/experiment.json` (flotta, scenari, `fault_schedule`). Fissa lo schema del messaggio.
 **Deliverable atteso:** file di configurazione + contratto messaggi.
 
-Lo schema del messaggio di telemetria era già fissato in `CLAUDE.md` (invariante di progetto); questo passo fissa i due file di configurazione che completano il contratto dati: la mappa a grafo e la definizione dell'esperimento (che è anche il ground truth).
+Lo schema del messaggio di telemetria era già definito come vincolo di partenza del progetto; questo passo fissa i due file di configurazione che completano il contratto dati: la mappa a grafo e la definizione dell'esperimento (che è anche il ground truth).
 
 ## `config/warehouse_graph.json`
 
@@ -19,9 +19,9 @@ A - B - C     |     J
               C  (corsia singola C-F e C-H)
 ```
 
-**Perché un anello con due choke point invece di un singolo corridoio:** un solo corridoio a corsia singola basta per bloccare un robot alla volta, ma per generare un vero **deadlock** (attesa circolare, cfr. tassonomia in `Contesto/self-healing-fleet-relazione.pdf` sez. 6) servono almeno due archi contesi in un ciclo: due robot che percorrono l'anello in direzioni opposte possono restare bloccati ciascuno sul proprio arco a corsia singola, in attesa che l'altro liberi il proprio. Lo stesso schema, con una policy di priorità simmetrica, dà luogo a **livelock** (i due si cedono il passo a vicenda senza mai attraversare). Questa geometria è pensata apposta per lo scenario del Passo 5.
+**Perché un anello con due choke point invece di un singolo corridoio:** un solo corridoio a corsia singola basta per bloccare un robot alla volta, ma per generare un vero **deadlock** (attesa circolare) servono almeno due archi contesi in un ciclo: due robot che percorrono l'anello in direzioni opposte possono restare bloccati ciascuno sul proprio arco a corsia singola, in attesa che l'altro liberi il proprio. Lo stesso schema, con una policy di priorità simmetrica, dà luogo a **livelock** (i due si cedono il passo a vicenda senza mai attraversare). Questa geometria è pensata apposta per lo scenario del Passo 5.
 
-L'edge `C-F` e il nodo `H` sono stati scelti apposta uguali all'esempio di messaggio di telemetria già presente in `CLAUDE.md` (`"current_edge": "C-F"`, `"goal_node": "H"`), così l'esempio nel contratto messaggi resta valido rispetto alla mappa reale.
+L'edge `C-F` e il nodo `H` sono stati scelti apposta uguali all'esempio di messaggio di telemetria del contratto dati (`"current_edge": "C-F"`, `"goal_node": "H"`), così l'esempio resta valido rispetto alla mappa reale.
 
 ## `config/experiment.json`
 

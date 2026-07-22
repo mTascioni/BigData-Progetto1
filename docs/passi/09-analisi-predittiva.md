@@ -1,9 +1,9 @@
 # Passo 9 — Analisi predittiva su time series (OFFLINE)
 
-**Obiettivo (da PLAN.md):** sui canali di salute storici, allenare un modello di previsione (ARIMA/Prophet o LSTM) che preveda il degrado e **quando** una metrica supererà la soglia critica → predire quali robot si guasteranno e con quanto anticipo (remaining useful life). Scrivere in `predictions/`.
+**Obiettivo:** sui canali di salute storici, allenare un modello di previsione (ARIMA/Prophet o LSTM) che preveda il degrado e **quando** una metrica supererà la soglia critica → predire quali robot si guasteranno e con quanto anticipo (remaining useful life). Scrivere in `predictions/`.
 **Deliverable atteso:** previsioni di guasto con lead time.
 
-Primo passo puramente "a freddo": nessuno stream, solo storico già persistito (Passo 8) analizzato in batch. È anche la tecnologia "prediction algorithms su time series" richiesta esplicitamente fra le quattro presenze minime del progetto (`CLAUDE.md`).
+Primo passo puramente "a freddo": nessuno stream, solo storico già persistito (Passo 8) analizzato in batch. È anche la tecnologia "prediction algorithms su time series" richiesta esplicitamente fra le quattro presenze minime del progetto.
 
 **Nota sulla scelta del modello**: il piano indica "ARIMA/Prophet o LSTM". Prima versione di questo passo: implementata con ARIMA (statsmodels). Deciso poi, di comune accordo, di sostituirlo con una **regressione lineare** — la richiesta di "previsione su time series" nel piano non è un vincolo rigido sulla tecnica esatta, e per segnali quasi lineari come le nostre rampe di guasto (Passo 2) una retta ai minimi quadrati è più semplice da spiegare e verificare, e produce risultati praticamente identici (confrontato più sotto: 130.5s di lead time contro i 130.0s che dava ARIMA sullo stesso segnale reale).
 

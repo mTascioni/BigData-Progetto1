@@ -139,6 +139,8 @@
         <li>2.12 Struttura del database (storico Parquet)</li>
         <li>2.13 Il percorso dei dati: dalla sorgente alla visualizzazione</li>
         <li>2.14 Orchestrazione e deployment</li>
+        <li>2.15 Pulizia e validazione dei dati lungo la pipeline</li>
+        <li>2.16 La suite di verifica (test/): cosa controlla, come</li>
       </ol>
     </li>
     <li>3. Risultati
@@ -374,6 +376,16 @@ Fig. 0 — Il grafo del magazzino (<code>config/warehouse_graph.json</code>): 10
 <h4>Come funziona il generatore sintetico</h4>
 <p>Gazebo non arriva a volumi di decine di migliaia di messaggi al secondo (il collo di bottiglia è la simulazione fisica, non Kafka/Spark). Per gli esperimenti di scalabilità (§3.2) è stato costruito un generatore puro Python (<code>generator/synthetic_generator.py</code>, nessuna dipendenza da ROS) che produce robot-token: percorrono lo stesso grafo del magazzino arco per arco a velocità costante, scegliendo il prossimo nodo <b>a caso</b> fra i vicini (nessuna sequenza predisposta, a differenza dei robot ROS), e pubblicano messaggi che rispettano <i>esattamente</i> lo stesso schema di <code>kafka_bridge.py</code>. Il carico è controllato da due parametri indipendenti (numero di robot-token × frequenza per robot); una coda a priorità (<code>heapq</code>) permette di scalare la schedulazione a migliaia di sorgenti in un solo processo. Il generatore supporta anche l'iniezione di guasti con lo stesso formato e la stessa logica di applicazione di <code>kafka_bridge.py</code>, così le metriche di precision/recall si calcolano nello stesso modo sia sui dati reali sia su quelli sintetici — con l'eccezione dei tre nodi dedicati alla flotta reale (<code>DEPOSITO</code>/<code>RISERVA1</code>/<code>RISERVA2</code>, §2.11), esclusi dal random walk perché non hanno senso per un robot-token generico.</p>
 
+<h4>Il modello dei dati: non un replay di bag ROS</h4>
+<p>Vale la pena essere espliciti su un punto non ovvio dal solo nome "generatore sintetico": non è un replay di una registrazione reale (una <code>rosbag</code> o uno storico Parquet campionato), ma una simulazione parametrica costruita da zero, pensata per essere statisticamente plausibile senza dipendere da nessun dato osservato in precedenza. Nello specifico:</p>
+<ul>
+  <li><b>Movimento</b>: <code>VirtualRobot.tick()</code> calcola la posizione per interpolazione lineare lungo l'arco corrente a velocità costante (<code>speed_mps</code>, parametro libero) — non fisica, non un modello cinematico, solo geometria (<code>x = x1 + t·(x2−x1)</code>, <code>t = distanza percorsa / lunghezza arco</code>). Il prossimo nodo è scelto a caso fra i vicini del grafo, evitando di tornare subito indietro se esistono alternative.</li>
+  <li><b>Schedulazione</b>: un solo processo Python gestisce migliaia di robot-token tramite una coda a priorità (<code>heapq</code>) di eventi "prossimo tick dovuto" — non un thread o una coroutine per robot (che non scalerebbe a migliaia di sorgenti), un min-heap che estrae sempre l'evento più imminente, gli fa produrre un messaggio, e lo re-inserisce per il tick successivo (<code>due_ts + periodo</code>).</li>
+  <li><b>Canali di salute</b>: <i>stessa</i> formula e <i>stessi</i> parametri di <code>kafka_bridge.py</code> — rumore gaussiano attorno a un nominale letto da <code>health_channels_nominal</code> in <code>config/experiment.json</code>, non una distribuzione inventata a parte per il generatore. È una scelta deliberata di coerenza: un guasto iniettato deve "spiccare" nello stesso modo sopra lo stesso rumore di fondo, sia sulla flotta reale sia su quella sintetica, altrimenti precision/recall non sarebbero confrontabili fra le due sorgenti.</li>
+  <li><b>Guasti</b>: stessa classe <code>FaultInjector</code>, stesso <code>fault_schedule</code>, stesse firme parametriche di §2.2 — condivise per file (non duplicate) proprio perché generatore e ponte ROS devono produrre un guasto indistinguibile a valle.</li>
+</ul>
+<p>In sintesi: il generatore non "ricorda" nulla di una run precedente né riproduce una traccia registrata — ogni esecuzione è un nuovo campionamento pseudo-casuale (seed opzionale, per riproducibilità nei test) da un modello statistico dichiarato, non un replay.</p>
+
 <h4>Quale usare per i test, e perché</h4>
 <p>La scelta non è indifferente: ciascuna modalità rende osservabile un aspetto diverso del sistema, e forzarla sull'altra o non produce il dato cercato o lo produce con troppa variabilità per essere utile.</p>
 <table>
@@ -404,6 +416,9 @@ Fig. 0 — Il grafo del magazzino (<code>config/warehouse_graph.json</code>): 10
 </ul>
 <p>Ogni messaggio arricchito viene scritto su <code>fleet_state</code> (stato live per la dashboard); se una delle due tecniche segnala un'anomalia, viene scritto anche su <code>anomalies</code> con <code>type="salute"</code> e l'elenco delle ragioni (<code>threshold_reasons</code>, eventualmente vuoto se solo l'Isolation Forest ha reagito). Verificato empiricamente che le due tecniche sono complementari, non ridondanti: in un test mirato una soglia su <code>motor_temp</code> scattava mentre l'Isolation Forest restava silenzioso (temperatura isolata alta, ma il resto del vettore "sembrava" nominale), e il pattern si è parzialmente invertito su uno spike di corrente.</p>
 <p><b>Nota per chi legge in sequenza</b>: entrambe le tecniche restano sempre attive per la detection descritta qui — <i>non</i> sono state rimosse in nessun punto del progetto. In §2.11 (estensione Passo 14) l'Isolation Forest viene <i>disaccoppiata</i> da un solo, specifico consumatore a valle — l'azione automatica di self healing sulla flotta reale, per un problema di falsi positivi statistici diventati consequenziali una volta collegati a un'azione reale — non dalla pipeline di detection in sé, dove continua a contribuire come qui descritto.</p>
+
+<h4>Come è allenato l'Isolation Forest, in pratica</h4>
+<p><code>streaming/isolation_forest_model.py</code> — <code>train_model()</code> genera 5000 vettori sintetici a 5 feature (<code>motor_temp</code>, <code>motor_current</code>, <code>battery_pct</code>, <code>v_lin</code>, <code>min_obstacle_dist</code>, seed fisso <code>42</code> per riproducibilità) e allena <code>sklearn.ensemble.IsolationForest(n_estimators=100, contamination=0.02)</code>. Non è un campionamento indipendente feature-per-feature: <code>v_lin</code> e <code>min_obstacle_dist</code> sono generati insieme, condizionati su uno stato "in movimento / fermo" scelto prima (60% probabilità di movimento) — un robot fermo ha una probabilità del 50% di essere "parcheggiato" vicino a qualcosa (<code>min_obstacle_dist</code> fra 0.3 e 2.0m, non un evento raro) invece che in area aperta, e un robot in movimento ha invece il 70% di probabilità di trovarsi in area aperta. Questa correlazione esplicita non è un dettaglio cosmetico: un primo campionamento indipendente delle due feature sotto-rappresentava la combinazione "fermo e vicino a qualcosa", causando falsi positivi sistematici quando un robot restava parcheggiato a lungo vicino a uno scaffale (§2.11, Passo 14) — il modello non l'aveva mai visto abbastanza spesso in allenamento per considerarlo normale. Il modello allenato viene serializzato (<code>pickle</code>) su file e ricaricato agli avvii successivi di <code>detection_job.py</code>, con un fallback che lo riallena al volo se il file manca — mai un motivo per bloccare l'avvio del job.</p>
 
 <h4>Rilevamento del deadlock</h4>
 <p>Finestra scorrevole di 20 secondi (slide 10s) per <code>current_edge</code>: se nella finestra compaiono almeno due robot distinti con <code>task_state="blocked"</code> sullo stesso arco, viene emessa un'anomalia <code>type="deadlock"</code>.</p>
@@ -493,8 +508,20 @@ Fig. 0 — Il grafo del magazzino (<code>config/warehouse_graph.json</code>): 10
 <p>Il backend (Node.js/Express) consuma <code>fleet_state</code> da Kafka (client <code>kafkajs</code>) e fa push via WebSocket ai client connessi; espone inoltre le route REST per il layer TAG, le previsioni, il controllo del generatore sintetico, il controllo della flotta reale e i risultati sperimentali. La dashboard (HTML + canvas 2D, JavaScript puro, nessun framework) disegna la mappa del magazzino, i robot colorati per stato con un anello di segnalazione per le anomalie, gli archi a capacità singola tratteggiati. Per un'animazione fluida nonostante il micro-batch di detection arrivi al massimo ogni 2 secondi, il client applica <i>dead reckoning</i>: estrapola la posizione ad ogni frame usando la velocità nota dall'ultimo messaggio, invece di attendere il prossimo pacchetto.</p>
 <p>Fra i pannelli disponibili: stato di tutti i robot (reali e sintetici) in tabella, log degli eventi comportamentali (deadlock/livelock) in tempo reale, pannello previsioni (dal layer predittivo), casella di interrogazione in linguaggio naturale, pannello di controllo per avviare/fermare il generatore sintetico scegliendo topologia e guasti, e — nell'estensione più recente — un pannello che lancia gli esperimenti di valutazione sperimentale <i>on demand</i> mostrandone i risultati mano a mano che ciascun sotto-esperimento termina, invece di un refresh periodico su grafici pre-generati.</p>
 
+<h4>Protocollo WebSocket: cinque tipi di messaggio, un solo endpoint</h4>
+<p>Un solo endpoint (<code>/ws</code>) e un solo <code>WebSocketServer</code> lato backend: nessuna sottoscrizione per-topic lato client, ogni messaggio viene diffuso (<i>broadcast</i>) a tutti i client connessi, che filtrano lato loro in base al campo <code>type</code>. Cinque tipi, ciascuno alimentato da una sorgente diversa:</p>
+<table>
+  <tr><th>Type</th><th>Quando viene inviato</th><th>Sorgente</th></tr>
+  <tr><td><code>snapshot</code></td><td>una volta, alla connessione di un nuovo client</td><td><code>fleetStateStore.getSnapshot()</code> — lo stato corrente di tutti i robot noti, cosi' un client che si collega a metà sessione non parte da una mappa vuota</td></tr>
+  <tr><td><code>update</code></td><td>ad ogni nuovo <code>fleet_state</code> consumato da Kafka</td><td><code>fleetStateStore.onUpdate()</code></td></tr>
+  <tr><td><code>remove</code></td><td>quando un robot sparisce (timeout, decommissioning, nuovo run)</td><td><code>fleetStateStore.onRemove()</code></td></tr>
+  <tr><td><code>anomaly</code></td><td>ad ogni evento sul topic <code>anomalies</code></td><td><code>anomalyStream.onEvent()</code></td></tr>
+  <tr><td><code>raw</code></td><td>campionato, al più ogni ~200ms per topic (§2.11, Passo 16)</td><td><code>rawStream.onRawMessage()</code> — pannello streaming live, debug</td></tr>
+</table>
+<p>Nessuna logica di filtro o aggregazione lato WebSocket: i tre servizi (<code>fleetStateStore.js</code>, <code>anomalyStream.js</code>, <code>rawStream.js</code>) sono consumer Kafka <code>kafkajs</code> indipendenti (§2.13), ciascuno con la propria logica di trasformazione a monte; il livello WebSocket si limita a serializzare e spedire, la stessa separazione delle responsabilità già vista nell'architettura generale del backend.</p>
+
 <h3>2.11 Estensione: self healing sulla flotta reale (e previsione live, Passo 15/16)</h3>
-<p>Oltre ai 13 passi del piano originale, su richiesta esplicita per una dimostrazione dal vivo, è stato realizzato un primo anello di retroazione reale limitato alla flotta ROS/Gazebo. Fino a questo punto il sistema era puramente diagnostico (rilevare, prevedere, segnalare — mai agire su ROS), coerentemente con il principio "il robot è solo la sorgente dati". L'estensione introduce un'eccezione deliberata e documentata, non una deriva silenziosa dello scope.</p>
+<p>Oltre ai 13 passi del piano originale, in vista di una dimostrazione dal vivo è stato realizzato un primo anello di retroazione reale limitato alla flotta ROS/Gazebo. Fino a questo punto il sistema era puramente diagnostico (rilevare, prevedere, segnalare — mai agire su ROS), coerentemente con il principio "il robot è solo la sorgente dati". L'estensione introduce un'eccezione deliberata e documentata, non una deriva silenziosa dello scope.</p>
 <ul>
   <li><b>Corridoi fisici</b>: i due archi a corsia singola del grafo sono stati fisicamente ristretti in Gazebo con pareti statiche, rendendo osservabili su dati reali (non solo sintetici) sia il deadlock sia il livelock.</li>
   <li><b>Iniezione di guasti dal vivo</b>: un nuovo canale di controllo ROS (<code>~fault_inject</code>, JSON su <code>std_msgs/String</code>) permette di aggiungere un guasto al bridge <i>a runtime</i> — riusa esattamente la stessa logica di attivazione/applicazione/logging dei guasti pre-schedulati, nessuna scorciatoia: il guasto iniettato dal vivo attraversa il topic <code>telemetry</code> reale.</li>
@@ -532,6 +559,17 @@ Fig. 0 — Il grafo del magazzino (<code>config/warehouse_graph.json</code>): 10
 </div>
 
 <h3>2.12 Struttura del database (storico Parquet)</h3>
+<h4>Perché Parquet, e cosa cambierebbe con le alternative</h4>
+<p>Parquet è un formato <b>colonnare</b>: a differenza di CSV o JSON Lines, che scrivono una riga intera per record, Parquet raggruppa i valori per colonna dentro blocchi compressi (<i>row group</i>), con lo schema incorporato nel file stesso. Per il pattern di lettura di questo progetto — il layer TAG, gli script <code>eval/</code> e <code>forecast_failures.py</code> quasi sempre selezionano poche colonne (es. solo <code>motor_temp</code> di un robot) su uno storico che cresce nel tempo — questo conta doppiamente: Spark legge da disco solo le colonne richieste (<i>column pruning</i>), e la compressione per colonna (valori simili vicini) è più efficace di quella per riga. Un CSV o un JSON Lines equivalente andrebbe letto per intero anche per una sola colonna, ed è più grande su disco a parità di dati (nessuna compressione colonnare, chiavi ripetute ad ogni riga nel caso JSON).</p>
+<p>Cosa cambierebbe con altri formati candidati:</p>
+<ul>
+  <li><b>CSV</b>: nessun tipo nativo (tutto stringa finché non riparsato), nessuna struttura annidata — <code>threshold_reasons</code> (array) e <code>params</code> di <code>injected_faults</code> (oggetto nidificato per tipo di guasto) andrebbero serializzati a mano in una stringa, perdendo la possibilità di interrogarli direttamente via SQL.</li>
+  <li><b>JSON Lines</b>: mantiene la struttura annidata (bene), è lo stesso formato già usato sul wire di Kafka (§2.4) — ma resta un formato a righe: va deserializzata l'intera riga anche per leggere una sola colonna, e senza compressione colonnare il footprint su disco cresce più in fretta.</li>
+  <li><b>Avro</b>: binario, schema incorporato, ottimo supporto alla evoluzione dello schema — probabilmente la scelta più naturale <i>sul wire</i> di uno stream (non è quella adottata qui, §2.2 spiega perché si è preferito JSON anche lì), ma resta un formato a righe: stesso svantaggio di CSV/JSON per query analitiche che leggono poche colonne su molte righe.</li>
+  <li><b>ORC</b>: colonnare come Parquet, prestazioni comparabili, storicamente più legato all'ecosistema Hive. Parquet resta il default più diffuso nell'ecosistema Spark, con supporto nativo senza configurazione aggiuntiva — la scelta riflette questo, non una misurazione che lo dichiari superiore a ORC per questo caso d'uso.</li>
+  <li><b>Delta Lake</b> (Parquet + log delle transazioni: ACID, time travel, upsert sicuri in concorrenza): valutato in fase di pianificazione iniziale, poi semplificato al solo Parquet. Lo storico di questo progetto è <i>append-only</i> per costruzione (un solo scrittore per tabella, mai un update o una cancellazione di righe esistenti — §2.15), quindi il vantaggio principale di Delta non si materializza; il costo concreto (una dipendenza Maven in più da risolvere ad ogni avvio, un log delle transazioni da mantenere) non era giustificato a questo volume di dati.</li>
+</ul>
+<p>Un effetto collaterale del formato, scoperto durante lo sviluppo: le colonne di partizione (es. <code>type</code> per <code>anomalies</code>, §2.7) <b>non</b> vengono scritte dentro ai singoli file Parquet — vivono solo nel path della cartella (<code>type=salute/...</code>), ricostruite dal lettore. Un primo tentativo di <code>offline/adaptive_thresholds.py</code> di leggere i singoli file Parquet uno a uno (invece della cartella intera) falliva con un <code>KeyError</code> proprio sulla colonna di partizione — un dettaglio non ovvio, specifico di come Parquet/Spark gestiscono il partizionamento in stile Hive.</p>
 <p>Non esiste un RDBMS tradizionale: lo "storico" è un insieme di quattro cartelle Parquet su un volume Docker condiviso (<code>shf-data</code>, montato su <code>/data</code>), scritte dal batch layer (§2.7, §2.8) e lette come tabelle SQL da <code>query_service.py</code> (§2.9), che ne registra una vista temporanea per ciascuna (<code>createOrReplaceTempView</code>) — sono esattamente le quattro tabelle descritte nello schema del prompt del layer TAG. Gli schemi Spark sono centralizzati in <code>streaming/schemas.py</code>, condivisi fra il job di detection e quello di persistenza.</p>
 
 <h4>telemetry</h4>
@@ -671,7 +709,59 @@ Fig. 0 — Il grafo del magazzino (<code>config/warehouse_graph.json</code>): 10
 <p>Un dettaglio operativo non visibile nei diagrammi: <code>detection_job.py</code> e <code>query_service.py</code> partono da soli con lo stack (<code>start-master.sh</code>, §2.14), mentre <code>persistence_job.py</code> va lanciato manualmente (<code>docker exec</code>, stesso comando <code>spark-submit --packages ...</code> visto sopra) — senza, lo storico Parquet non cresce, e gli esperimenti che ne dipendono (execution accuracy del TAG, §3.1) non hanno dati recenti su cui lavorare.</p>
 
 <h3>2.14 Orchestrazione e deployment</h3>
-<p>L'intero sistema è orchestrato con Docker Compose: un container Kafka, due container Spark (master/worker), un container Node per backend e dashboard, un container ROS (basato su <code>osrf/ros:noetic-desktop-full</code> con i pacchetti TurtleBot3, noVNC per l'accesso GUI in debug). All'interno del container ROS, un processo <code>supervisord</code> gestisce in parallelo: <code>roscore</code>, la simulazione Gazebo multi-robot, e diversi micro-servizi HTTP di controllo con lo stesso pattern architetturale (server <code>http.server</code> nativo, senza framework, per poche route interne): il generatore sintetico, il controllo della flotta reale (guasti live, missioni), e il lancio on-demand degli esperimenti di valutazione. L'intero stack si avvia con un singolo <code>docker compose up -d</code>, senza comandi manuali post-avvio.</p>
+<p>L'intero sistema è orchestrato con Docker Compose: cinque container — <code>kafka</code>, due Spark (<code>spark-master</code>/<code>spark-worker</code>), <code>backend</code> (Node, serve anche la dashboard statica), <code>ros</code> (basato su <code>osrf/ros:noetic-desktop-full</code> con i pacchetti TurtleBot3, noVNC per l'accesso GUI in debug). L'intero stack si avvia con un singolo <code>docker compose up -d</code>, senza comandi manuali post-avvio — con una sola eccezione dichiarata più sotto (<code>persistence_job.py</code>).</p>
+
+<h4>Chi lancia cosa: non tutti gli script partono allo stesso modo</h4>
+<p>Non c'è un meccanismo di avvio unico: ogni script/processo usa il meccanismo più adatto al proprio ruolo, non per incoerenza ma perché "parte da solo sempre", "parte da solo ma è disattivabile" e "va lanciato quando serve" sono tre esigenze diverse.</p>
+<table>
+  <tr><th>Script/processo</th><th>Container</th><th>Come parte</th><th>Individuale o gruppo?</th></tr>
+  <tr><td>Kafka broker</td><td><code>kafka</code></td><td>entrypoint dell'immagine <code>apache/kafka</code>, nessuno script custom</td><td>—</td></tr>
+  <tr><td><code>query_service.py</code></td><td><code>spark-master</code></td><td><code>start-master.sh</code> (override di <code>command:</code> in <code>docker-compose.yml</code>), loop con retry automatico</td><td>Automatico, con <code>detection_job.py</code></td></tr>
+  <tr><td><code>detection_job.py</code></td><td><code>spark-master</code></td><td>stesso <code>start-master.sh</code>, secondo <code>spark-submit</code> nello stesso script</td><td>Automatico, con <code>query_service.py</code></td></tr>
+  <tr><td><code>persistence_job.py</code></td><td><code>spark-master</code>/<code>worker</code></td><td><b>manuale</b>: <code>docker exec ... spark-submit ... persistence_job.py</code> — nessuno script lo avvia da solo</td><td>Individuale, a comando</td></tr>
+  <tr><td>Spark worker</td><td><code>spark-worker</code></td><td>CMD originale dell'immagine bitnami, si registra da solo al master</td><td>Automatico</td></tr>
+  <tr><td>backend Node + dashboard</td><td><code>backend</code></td><td><code>npm start</code> (CMD del Dockerfile), un solo processo</td><td>Automatico</td></tr>
+  <tr><td><code>roscore</code>, <code>vncserver</code>, <code>novnc</code></td><td><code>ros</code></td><td>programmi <code>supervisord</code>, <code>autostart=true</code></td><td>Automatico, indipendenti</td></tr>
+  <tr><td><code>generator_service.py</code></td><td><code>ros</code></td><td>programma <code>supervisord</code>, <code>autostart=true</code> — resta in ascolto HTTP, il generatore vero e proprio parte solo su richiesta (<code>POST /start</code>)</td><td>Automatico (il servizio), on-demand (il run)</td></tr>
+  <tr><td><code>fleet_control_service.py</code></td><td><code>ros</code></td><td>programma <code>supervisord</code>, <code>autostart=true</code> (con 5s di ritardo: aspetta <code>roscore</code>)</td><td>Automatico</td></tr>
+  <tr><td><code>eval_service.py</code></td><td><code>ros</code></td><td>programma <code>supervisord</code>, <code>autostart=true</code> — in ascolto, i run partono su <code>POST /run</code></td><td>Automatico (il servizio), on-demand (il run)</td></tr>
+  <tr><td><code>sim_multi_robot</code> (Gazebo + tutti i nodi robot)</td><td><code>ros</code></td><td>programma <code>supervisord</code>, <b><code>autostart=false</code></b>: <code>fleet_control_service.py</code> lo avvia/ferma con <code>supervisorctl start/stop</code> su richiesta della dashboard</td><td>Gruppo (un <code>roslaunch</code> avvia tutti i nodi della flotta insieme)</td></tr>
+</table>
+<p>Il caso di <code>persistence_job.py</code> merita una nota esplicita, già citata in §2.13: è l'unico componente della pipeline "core" senza autostart. Una scelta pragmatica più che architetturale — durante lo sviluppo va fermato/riavviato spesso per ripulire checkpoint (§2.7), e automatizzarlo avrebbe richiesto lo stesso meccanismo di retry-loop di <code>start-master.sh</code> senza un beneficio operativo chiaro finché non lo si tratta come un servizio da "mettere e dimenticare" — una candidatura naturale per gli sviluppi futuri (§4.3).</p>
+<p>Dentro il container <code>ros</code>, <code>sim_multi_robot</code> non è un solo processo ma un <code>roslaunch</code> che avvia in un colpo solo <code>roscore</code> (già su, separato), Gazebo, e per ciascun robot della flotta (scala <code>small</code> o <code>large</code>) una terna <code>move_base</code> + <code>graph_navigator.py</code> + <code>kafka_bridge.py</code> nel proprio namespace — coerente con l'essere "un gruppo", non componenti indipendenti: non ha senso far partire la navigazione di un robot senza la sua simulazione fisica.</p>
+
+<h4>Rete: come i container si trovano</h4>
+<p>Nessuna configurazione di rete esplicita in <code>docker-compose.yml</code>: Compose crea automaticamente una rete bridge dedicata al progetto, e ogni servizio vi si connette con il proprio nome come hostname DNS interno — <code>kafka:9092</code>, <code>spark-master:7077</code>, <code>backend:3000</code> sono risoluzioni DNS Docker, non indirizzi IP fissi né configurazione manuale. Le variabili d'ambiente dei vari servizi (<code>KAFKA_BOOTSTRAP</code>, <code>QUERY_SERVICE_URL</code>, <code>BACKEND_URL</code>, ecc., §2.13) contengono questi nomi, non IP. Solo le porte elencate in <code>ports:</code> sono raggiungibili anche dall'host (es. <code>3000</code> per la dashboard, <code>9094</code> per Kafka da un client esterno, <code>6080</code> per noVNC) — la comunicazione fra container passa sempre per la rete interna, mai attraverso l'host.</p>
+
+<h3>2.15 Pulizia e validazione dei dati lungo la pipeline</h3>
+<p>Non c'è un unico "step di pulizia" centralizzato: ogni stadio della pipeline valida/pulisce solo ciò che gli serve per non propagare un problema a valle, con la tecnica più adatta a quello stadio.</p>
+<p><b>Sia in streaming sia fuori, ma con tecniche diverse per un motivo preciso.</b> Il lato in streaming (ingresso ROS/Kafka, §2.2, e <code>detection_job.py</code>, §2.6) può permettersi solo controlli <i>a costo pressoché nullo per messaggio</i> — un confronto <code>is not None</code>, un <code>fillna</code> su una manciata di colonne — perché ogni micro-batch ha un budget di tempo stretto (trigger di 2-10s, §2.6): un controllo costoso ripetuto ad ogni riga farebbe accumulare ritardo. Il lato non in streaming (<code>forecast_failures.py</code>, <code>offline/adaptive_thresholds.py</code>, §2.7-§2.8, eseguiti on-demand o periodicamente, non su un trigger stretto) può permettersi controlli più costosi sull'intero dataset in una volta — scansionare una cartella intera cercando file da 0 byte, o un <code>dropna()</code> su tutta la colonna prima di un fit — proprio perché non ha lo stesso vincolo di tempo reale. Sono due filosofie diverse per lo stesso obiettivo, non un'incoerenza: pulizia a basso costo e localizzata dove il tempo è poco, pulizia più esaustiva dove il tempo c'è.</p>
+<ul>
+  <li><b>All'ingresso (ROS &rarr; Kafka), §2.2</b>: <code>/scan</code> arriva con letture <code>LaserScan.ranges[]</code> che possono includere valori fuori dal range fisico del sensore (troppo vicino/lontano, letture spurie) — <code>kafka_bridge.py</code> filtra esplicitamente per <code>range_min</code>/<code>range_max</code> prima di calcolare <code>min_obstacle_dist</code>, scartando le letture non valide invece di lasciarle inquinare il minimo.</li>
+  <li><b>Messaggi malformati, ovunque venga fatto parsing</b>: sia i consumer Kafka del backend (<code>fleetStateStore.js</code>, <code>anomalyStream.js</code>) sia gli script <code>eval/</code>/<code>test/</code> avvolgono ogni <code>JSON.parse</code>/<code>json.loads</code> in un blocco che scarta silenziosamente il singolo messaggio non deserializzabile invece di far cadere l'intero consumer — un messaggio corrotto raro non deve fermare il flusso di tutti gli altri. Lato Spark, <code>from_json</code> con uno schema esplicito (§2.3, <code>schemas.py</code>) ha lo stesso effetto per costruzione: un campo mancante o malformato diventa <code>null</code> nella riga, non un'eccezione che interrompe il micro-batch.</li>
+  <li><b>Nello streaming di detection (§2.6)</b>: i controlli soglia (<code>threshold_reasons_udf</code>) verificano esplicitamente che ciascun valore non sia <code>None</code> prima di confrontarlo con una soglia — un robot appena connesso, senza ancora una lettura valida per un canale, non deve generare un'anomalia falsa né far fallire lo Spark job. L'Isolation Forest, che non tollera <code>NaN</code> in input, applica <code>fillna({"v_lin": 0.0, "min_obstacle_dist": 3.5})</code> prima della predizione — valori di default scelti come "neutri" (fermo, area aperta), non zero ovunque: un default arbitrario avrebbe potuto far scattare un'anomalia spuria su un semplice dato mancante.</li>
+  <li><b>Nello storico Parquet (§2.7, §2.8)</b>: <code>forecast_failures.py</code> rimuove esplicitamente eventuali file <code>.parquet</code> da 0 byte prima di leggere una cartella (capita se lo streaming writer viene interrotto a metà scrittura — un file vuoto manda in crash <code>pandas.read_parquet</code> se letto direttamente, bypassando il commit log <code>_spark_metadata</code> di Spark che lo escluderebbe). Sia <code>forecast_failures.py</code> sia <code>offline/adaptive_thresholds.py</code> applicano <code>dropna()</code> sulla colonna di interesse prima di un fit di regressione o del calcolo di un percentile — un <code>NaN</code> silenzioso in ingresso a <code>numpy.polyfit</code> produrrebbe un risultato spazzatura senza sollevare errore.</li>
+  <li><b>In uscita, verso i consumatori JSON (backend, dashboard, <code>eval/</code>)</b>: <code>NaN</code>/<code>Infinity</code> sono float Python legali ma non JSON valido (§4.1) — <code>json_safe()</code> in <code>eval/common.py</code> li converte ricorsivamente in <code>null</code> prima di ogni scrittura di <code>index.json</code> o risposta HTTP, altrimenti un valore statisticamente legittimo (es. precisione con <code>TP+FP=0</code>) romperebbe silenziosamente il parsing lato client.</li>
+</ul>
+<p>Un limite dichiarato, non nascosto: non esiste una fase di <i>deduplicazione</i> esplicita in nessun punto della pipeline. Rileva solo in caso di rilettura da un checkpoint perso (§2.7) — scenario raro, documentato come limite noto in §4.2, non gestito con una logica ad hoc (es. una chiave di idempotenza) perché il volume/la frequenza con cui accade in pratica non l'hanno reso finora necessario.</p>
+
+<h3>2.16 La suite di verifica (<code>test/</code>): cosa controlla, come</h3>
+<p>Distinta da <code>eval/</code> (§3): qui si verifica <b>correttezza</b> (pass/fail), non si producono numeri per la tesina — stesso principio della differenza già discussa fra "guasto" e "previsione" (§2.9), applicato questa volta alla metodologia sperimentale invece che al dominio applicativo. Gira dentro il container <code>ros</code> (ha già <code>confluent-kafka</code>/<code>pandas</code>/<code>pyarrow</code> e vede tutti i servizi sulla rete Docker interna).</p>
+<p><code>test/conftest.py</code> — fixture condivise, stesso stile di <code>eval/common.py</code> (client Kafka, helper HTTP verso <code>query_service.py</code>/backend/generatore) più due fixture <code>autouse</code> specifiche di questa suite:</p>
+<ul>
+  <li><code>_pause_real_simulation</code> (session-scoped): mette in pausa <code>sim_multi_robot</code> via <code>supervisorctl</code> per tutta la sessione di test (Gazebo è pesante in CPU e non serve — i test usano il generatore sintetico per avere robot controllati), e la rimette su alla fine <i>solo se</i> era già in esecuzione prima — un controllo esplicito, perché <code>supervisorctl stop</code> ritorna comunque successo anche se il programma era già fermo.</li>
+  <li><code>_ensure_generator_idle</code> (per-test): ferma il generatore prima e dopo ogni test, cosi' un test fallito a metà non lascia un run appeso che fa fallire i successivi con <code>409</code>.</li>
+</ul>
+<p>Sei file, organizzati per area della pipeline, non per tecnologia:</p>
+<table>
+  <tr><th>File</th><th>Cosa verifica</th></tr>
+  <tr><td><code>test_schema.py</code></td><td>i messaggi prodotti rispettano lo schema condiviso (§2.3) — telemetria, <code>fleet_state</code>, <code>injected_faults</code>, <code>predictions</code></td></tr>
+  <tr><td><code>test_detection_effectiveness.py</code></td><td>veri/falsi positivi puntuali per salute, deadlock, livelock (scenari mirati, non uno sweep statistico come in <code>eval/</code>)</td></tr>
+  <tr><td><code>test_fault_ground_truth.py</code></td><td>un guasto iniettato produce un record <code>injected_faults</code> coerente (timestamp, robot corretto anche con <code>robot_id="random"</code>)</td></tr>
+  <tr><td><code>test_prediction_accuracy.py</code></td><td>la previsione offline (§2.8) converge vicino al valore analitico atteso, e <i>non</i> scatta su un canale stabile o su un trend nella direzione sbagliata (test di non-falso-positivo, non solo di accuratezza)</td></tr>
+  <tr><td><code>test_tag_accuracy.py</code></td><td>risposte del layer TAG confrontate con una query di verità diretta, più la guardia anti-<code>SELECT</code>-only</td></tr>
+  <tr><td><code>test_efficiency.py</code></td><td>soglie minime di throughput/latenza (pass/fail, non i numeri completi dello sweep di §3.2)</td></tr>
+</table>
 
 <h2>3. Risultati</h2>
 
@@ -695,14 +785,560 @@ Fig. 0 — Il grafo del magazzino (<code>config/warehouse_graph.json</code>): 10
   <tr><td><b>guasto realmente iniettato</b></td><td>vero positivo (TP)</td><td>falso negativo (FN)</td></tr>
   <tr><td><b>nessun guasto iniettato</b></td><td>falso positivo (FP)</td><td>vero negativo (TN)</td></tr>
 </table>
-<p>Da qui, le formule standard: <code>precision = TP / (TP + FP)</code> (fra tutti gli allarmi lanciati, quanti erano guasti veri), <code>recall = TP / (TP + FN)</code> (fra tutti i guasti veri, quanti sono stati notati), <code>F1</code> la loro media armonica. Nel run riportato in tabella: TP=3 (tutti e 3 i robot guasti rilevati), FP=0 (nessuno dei 5 robot sani è mai comparso su <code>anomalies</code>), FN=0, TN=5 — da cui precision=recall=F1=1.00.</p>
+<p>Da qui, le formule standard: <code>precision = TP / (TP + FP)</code> (fra tutti gli allarmi lanciati, quanti erano guasti veri), <code>recall = TP / (TP + FN)</code> (fra tutti i guasti veri, quanti sono stati notati), <code>F1</code> la loro media armonica. Nel run più recente: TP=3 (tutti e 3 i robot guasti rilevati), FP=3, FN=0, TN=2 — precision=0.50, recall=1.00, F1=0.67.</p>
 <p>Un dettaglio importante per l'interpretazione: questa metrica è <i>binaria per robot</i> ("è mai stato rilevato durante il guasto, sì/no"), non conta quante volte l'anomalia è stata ri-emessa nella finestra (il job di detection, §2.6, scrive un evento ad ogni trigger di 2s in cui la soglia/il modello restano sopra soglia — durante 15s di guasto attivo, il conteggio grezzo di eventi sarebbe quindi tipicamente 6-8, non 1). Contare "rilevato/non rilevato" per robot, invece che il numero grezzo di eventi, evita di gonfiare artificialmente precision/recall sommando eventi che sono in realtà la stessa anomalia osservata più volte.</p>
+<p><b>Il recall è stabile fra run diversi, la precision no</b> — un'osservazione empirica, non solo teorica: lo stesso esperimento, eseguito in tre occasioni diverse nel corso dello sviluppo, ha prodotto (precision, recall): (1.00, 1.00), (indefinita, 0.00 — nessun vero positivo rilevato) e (0.50, 1.00). Il recall vicino a 1.00 nella maggioranza dei run conferma che il segnale di guasto vero (<code>spike_corrente</code>) è quasi sempre abbastanza forte da superare la soglia fissa quando è davvero attivo; la precision oscilla perché con solo 8 robot e una finestra di osservazione di 25s bastano 1-2 falsi positivi in più o in meno — dovuti al rumore del random walk del generatore che occasionalmente sconfina oltre soglia anche su un robot "sano" — per spostare il rapporto TP/(TP+FP) in modo vistoso. È lo stesso motivo, alla radice, del collo di bottiglia di precision osservato a scala molto più grande in §3.3 (Fig. 5): con soglie fisse e non ricalibrate su questi run brevi, il tasso di falsi positivi per singolo robot resta piccolo ma non nullo, e diventa evidente sia quando i robot totali sono pochi (varianza statistica) sia quando sono moltissimi (accumulo).</p>
+
+<h4>Previsione in streaming (Passo 15/16) — lo stesso esperimento, sul quarto operatore</h4>
+<p>Lo stesso schema di ground truth si applica al segnale <code>type="previsione"</code> del quarto operatore stateful di <code>detection_job.py</code> (§2.6): l'esperimento <code>run_live_prediction_experiment</code> mette in campo 6 robot-token, ne guasta 3 con un <code>preavviso_intermittente</code> di 60s, e misura sia se il robot compare su <code>anomalies</code> con <code>type="previsione"</code> sia la latenza fra l'istante reale di attivazione del guasto e il momento in cui l'anomalia viene ricevuta. Sull'ultimo run: precision=1.00, recall=1.00, F1=1.00 (TP=3, FP=0, FN=0, TN=3) — nessun falso positivo, a differenza della detection di salute discussa sopra. La latenza media onset&rarr;previsione osservata è stata di 62.2s, coerente con la soglia "al terzo superamento in una finestra di 60s" della logica descritta in §2.6: un preavviso richiede, per costruzione, di accumulare evidenza su più cicli prima di scattare, quindi una latenza dell'ordine della finestra stessa è attesa, non un difetto.</p>
+<div class="diagram">
+<svg viewBox="0 0 348.192812 221.11675" width="100%" style="max-width:261pt; display:block; margin:0 auto;" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+ <defs>
+  <style type="text/css">
+*{stroke-linecap:butt;stroke-linejoin:round;}
+  </style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 221.11675
+L 348.192812 221.11675
+L 348.192812 0
+L 0 0
+z
+" style="fill:none;"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 28.512813 198.206437
+L 340.992813 198.206437
+L 340.992813 20.798437
+L 28.512813 20.798437
+z
+" style="fill:none;"/>
+   </g>
+   <g id="patch_3">
+    <path clip-path="url(#p335ded9d0a)" d="M 42.716449 198.206437
+L 77.149507 198.206437
+L 77.149507 121.072524
+L 42.716449 121.072524
+z
+" style="fill:#2b6cb0;"/>
+   </g>
+   <g id="patch_4">
+    <path clip-path="url(#p335ded9d0a)" d="M 150.319755 198.206437
+L 184.752813 198.206437
+L 184.752813 43.938611
+L 150.319755 43.938611
+z
+" style="fill:#2b6cb0;"/>
+   </g>
+   <g id="patch_5">
+    <path clip-path="url(#p335ded9d0a)" d="M 257.92306 198.206437
+L 292.356118 198.206437
+L 292.356118 95.36122
+L 257.92306 95.36122
+z
+" style="fill:#2b6cb0;"/>
+   </g>
+   <g id="patch_6">
+    <path clip-path="url(#p335ded9d0a)" d="M 77.149507 198.206437
+L 111.582565 198.206437
+L 111.582565 43.938611
+L 77.149507 43.938611
+z
+" style="fill:#c07a1f;"/>
+   </g>
+   <g id="patch_7">
+    <path clip-path="url(#p335ded9d0a)" d="M 184.752813 198.206437
+L 219.18587 198.206437
+L 219.18587 43.938611
+L 184.752813 43.938611
+z
+" style="fill:#c07a1f;"/>
+   </g>
+   <g id="patch_8">
+    <path clip-path="url(#p335ded9d0a)" d="M 292.356118 198.206437
+L 326.789176 198.206437
+L 326.789176 43.938611
+L 292.356118 43.938611
+z
+" style="fill:#c07a1f;"/>
+   </g>
+   <g id="matplotlib.axis_1">
+    <g id="xtick_1">
+     <g id="line2d_1">
+      <path clip-path="url(#p335ded9d0a)" d="M 77.149507 198.206437
+L 77.149507 20.798437
+" style="fill:none;stroke:#eef1f6;stroke-linecap:square;stroke-width:0.8;"/>
+     </g>
+     <g id="line2d_2">
+      <defs>
+       <path d="M 0 0
+L 0 3.5
+" id="m175c1348cf" style="stroke:#333333;stroke-width:0.8;"/>
+      </defs>
+      <g>
+       <use style="fill:#333333;stroke:#333333;stroke-width:0.8;" x="77.149507" xlink:href="#m175c1348cf" y="198.206437"/>
+      </g>
+     </g>
+     <g id="text_1">
+      <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;font-style:normal;font-weight:normal;text-anchor:middle;" transform="rotate(-0, 77.149507, 212.045031)" x="77.149507" y="212.045031">precision</text>
+     </g>
+    </g>
+    <g id="xtick_2">
+     <g id="line2d_3">
+      <path clip-path="url(#p335ded9d0a)" d="M 184.752813 198.206437
+L 184.752813 20.798437
+" style="fill:none;stroke:#eef1f6;stroke-linecap:square;stroke-width:0.8;"/>
+     </g>
+     <g id="line2d_4">
+      <g>
+       <use style="fill:#333333;stroke:#333333;stroke-width:0.8;" x="184.752813" xlink:href="#m175c1348cf" y="198.206437"/>
+      </g>
+     </g>
+     <g id="text_2">
+      <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;font-style:normal;font-weight:normal;text-anchor:middle;" transform="rotate(-0, 184.752813, 212.045031)" x="184.752813" y="212.045031">recall</text>
+     </g>
+    </g>
+    <g id="xtick_3">
+     <g id="line2d_5">
+      <path clip-path="url(#p335ded9d0a)" d="M 292.356118 198.206437
+L 292.356118 20.798437
+" style="fill:none;stroke:#eef1f6;stroke-linecap:square;stroke-width:0.8;"/>
+     </g>
+     <g id="line2d_6">
+      <g>
+       <use style="fill:#333333;stroke:#333333;stroke-width:0.8;" x="292.356118" xlink:href="#m175c1348cf" y="198.206437"/>
+      </g>
+     </g>
+     <g id="text_3">
+      <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;font-style:normal;font-weight:normal;text-anchor:middle;" transform="rotate(-0, 292.356118, 212.045031)" x="292.356118" y="212.045031">f1</text>
+     </g>
+    </g>
+   </g>
+   <g id="matplotlib.axis_2">
+    <g id="ytick_1">
+     <g id="line2d_7">
+      <path clip-path="url(#p335ded9d0a)" d="M 28.512813 198.206437
+L 340.992813 198.206437
+" style="fill:none;stroke:#eef1f6;stroke-linecap:square;stroke-width:0.8;"/>
+     </g>
+     <g id="line2d_8">
+      <defs>
+       <path d="M 0 0
+L -3.5 0
+" id="m42097754f7" style="stroke:#333333;stroke-width:0.8;"/>
+      </defs>
+      <g>
+       <use style="fill:#333333;stroke:#333333;stroke-width:0.8;" x="28.512813" xlink:href="#m42097754f7" y="198.206437"/>
+      </g>
+     </g>
+     <g id="text_4">
+      <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;font-style:normal;font-weight:normal;text-anchor:end;" transform="rotate(-0, 21.512813, 201.625734)" x="21.512813" y="201.625734">0.0</text>
+     </g>
+    </g>
+    <g id="ytick_2">
+     <g id="line2d_9">
+      <path clip-path="url(#p335ded9d0a)" d="M 28.512813 167.352872
+L 340.992813 167.352872
+" style="fill:none;stroke:#eef1f6;stroke-linecap:square;stroke-width:0.8;"/>
+     </g>
+     <g id="line2d_10">
+      <g>
+       <use style="fill:#333333;stroke:#333333;stroke-width:0.8;" x="28.512813" xlink:href="#m42097754f7" y="167.352872"/>
+      </g>
+     </g>
+     <g id="text_5">
+      <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;font-style:normal;font-weight:normal;text-anchor:end;" transform="rotate(-0, 21.512813, 170.772169)" x="21.512813" y="170.772169">0.2</text>
+     </g>
+    </g>
+    <g id="ytick_3">
+     <g id="line2d_11">
+      <path clip-path="url(#p335ded9d0a)" d="M 28.512813 136.499307
+L 340.992813 136.499307
+" style="fill:none;stroke:#eef1f6;stroke-linecap:square;stroke-width:0.8;"/>
+     </g>
+     <g id="line2d_12">
+      <g>
+       <use style="fill:#333333;stroke:#333333;stroke-width:0.8;" x="28.512813" xlink:href="#m42097754f7" y="136.499307"/>
+      </g>
+     </g>
+     <g id="text_6">
+      <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;font-style:normal;font-weight:normal;text-anchor:end;" transform="rotate(-0, 21.512813, 139.918604)" x="21.512813" y="139.918604">0.4</text>
+     </g>
+    </g>
+    <g id="ytick_4">
+     <g id="line2d_13">
+      <path clip-path="url(#p335ded9d0a)" d="M 28.512813 105.645742
+L 340.992813 105.645742
+" style="fill:none;stroke:#eef1f6;stroke-linecap:square;stroke-width:0.8;"/>
+     </g>
+     <g id="line2d_14">
+      <g>
+       <use style="fill:#333333;stroke:#333333;stroke-width:0.8;" x="28.512813" xlink:href="#m42097754f7" y="105.645742"/>
+      </g>
+     </g>
+     <g id="text_7">
+      <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;font-style:normal;font-weight:normal;text-anchor:end;" transform="rotate(-0, 21.512813, 109.065039)" x="21.512813" y="109.065039">0.6</text>
+     </g>
+    </g>
+    <g id="ytick_5">
+     <g id="line2d_15">
+      <path clip-path="url(#p335ded9d0a)" d="M 28.512813 74.792177
+L 340.992813 74.792177
+" style="fill:none;stroke:#eef1f6;stroke-linecap:square;stroke-width:0.8;"/>
+     </g>
+     <g id="line2d_16">
+      <g>
+       <use style="fill:#333333;stroke:#333333;stroke-width:0.8;" x="28.512813" xlink:href="#m42097754f7" y="74.792177"/>
+      </g>
+     </g>
+     <g id="text_8">
+      <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;font-style:normal;font-weight:normal;text-anchor:end;" transform="rotate(-0, 21.512813, 78.211474)" x="21.512813" y="78.211474">0.8</text>
+     </g>
+    </g>
+    <g id="ytick_6">
+     <g id="line2d_17">
+      <path clip-path="url(#p335ded9d0a)" d="M 28.512813 43.938611
+L 340.992813 43.938611
+" style="fill:none;stroke:#eef1f6;stroke-linecap:square;stroke-width:0.8;"/>
+     </g>
+     <g id="line2d_18">
+      <g>
+       <use style="fill:#333333;stroke:#333333;stroke-width:0.8;" x="28.512813" xlink:href="#m42097754f7" y="43.938611"/>
+      </g>
+     </g>
+     <g id="text_9">
+      <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;font-style:normal;font-weight:normal;text-anchor:end;" transform="rotate(-0, 21.512813, 47.357908)" x="21.512813" y="47.357908">1.0</text>
+     </g>
+    </g>
+   </g>
+   <g id="patch_9">
+    <path d="M 28.512813 198.206437
+L 28.512813 20.798437
+" style="fill:none;stroke:#c9d2e0;stroke-linecap:square;stroke-linejoin:miter;stroke-width:0.8;"/>
+   </g>
+   <g id="patch_10">
+    <path d="M 340.992813 198.206437
+L 340.992813 20.798437
+" style="fill:none;stroke:#c9d2e0;stroke-linecap:square;stroke-linejoin:miter;stroke-width:0.8;"/>
+   </g>
+   <g id="patch_11">
+    <path d="M 28.512812 198.206437
+L 340.992813 198.206437
+" style="fill:none;stroke:#c9d2e0;stroke-linecap:square;stroke-linejoin:miter;stroke-width:0.8;"/>
+   </g>
+   <g id="patch_12">
+    <path d="M 28.512812 20.798437
+L 340.992813 20.798437
+" style="fill:none;stroke:#c9d2e0;stroke-linecap:square;stroke-linejoin:miter;stroke-width:0.8;"/>
+   </g>
+   <g id="text_10">
+    <text style="fill:#10233f;font-family:DejaVu Sans;font-size:10px;font-style:normal;font-weight:normal;text-anchor:middle;" transform="rotate(-0, 184.752813, 14.798437)" x="184.752813" y="14.798437">Effectiveness: guasto persistente vs preavviso in streaming</text>
+   </g>
+   <g id="legend_1">
+    <g id="patch_13">
+     <path d="M 94.870586 33.247266
+L 109.870586 33.247266
+L 109.870586 27.997266
+L 94.870586 27.997266
+z
+" style="fill:#2b6cb0;"/>
+    </g>
+    <g id="text_11">
+     <text style="fill:#222222;font-family:DejaVu Sans;font-size:7.5px;font-style:normal;font-weight:normal;text-anchor:start;" transform="rotate(-0, 115.870586, 33.247266)" x="115.870586" y="33.247266">guasto persistente (type=salute)</text>
+    </g>
+    <g id="patch_14">
+     <path d="M 94.870586 44.255859
+L 109.870586 44.255859
+L 109.870586 39.005859
+L 94.870586 39.005859
+z
+" style="fill:#c07a1f;"/>
+    </g>
+    <g id="text_12">
+     <text style="fill:#222222;font-family:DejaVu Sans;font-size:7.5px;font-style:normal;font-weight:normal;text-anchor:start;" transform="rotate(-0, 115.870586, 44.255859)" x="115.870586" y="44.255859">preavviso intermittente (type=previsione)</text>
+    </g>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="p335ded9d0a">
+   <rect height="177.408" width="312.48" x="28.512813" y="20.798437"/>
+  </clipPath>
+ </defs>
+</svg>
+<div class="fig-caption">Fig. 4 — Effectiveness a confronto: la detection di salute su guasto persistente (blu, §3.1) soffre di falsi positivi (precision bassa) che il preavviso in streaming (ambra) non mostra in questo run — il recall resta comunque a 1.00 in entrambi i casi.</div>
+</div>
 
 <h4>Deadlock e livelock: verifica di scenario, non una confusion matrix</h4>
 <p>A differenza della detection di salute, deadlock e livelock <b>non hanno</b> un esperimento di precision/recall quantitativo in <code>eval/</code>: non esiste un modo economico di generare, in modo ripetuto e controllato, decine di episodi di stallo comportamentale veri e falsi su cui calcolare una statistica (a differenza di un guasto di salute, che si inietta sommando un valore a un canale). La loro correttezza è invece verificata nella suite <code>test/</code> (pass/fail, non numeri) con scenari costruiti apposta: test che devono <i>far scattare</i> l'anomalia (es. un robot fermo con <code>task_state="moving"</code> per oltre 60s consecutivi) e test che <i>non devono farla scattare</i> (es. robot in movimento normale, o durante un sorpasso su corridoio a corsia singola). È lo stesso principio di ground truth — uno scenario con uno stato atteso noto a priori — applicato in modo booleano invece che statistico. I tre bug di falsi positivi corretti sul rilevatore di livelock (§2.6) sono stati tutti trovati esattamente in questo modo: un test "non deve scattare" che scattava.</p>
 
 <h4>Previsione — come si misura l'errore</h4>
 <p>Anche qui la verità di riferimento è costruita, non osservata: tre segnali sintetici con <b>pendenza nota a priori</b> (es. <code>motor_temp</code> che cresce di 0.05°C/s da un valore iniziale noto). Da pendenza e valore iniziale si calcola <b>analiticamente</b> l'istante in cui la retta vera incrocerebbe la soglia critica del canale, e da lì il lead time "vero" (<code>expected_lead_time_s = tempo di incrocio atteso − durata della finestra osservata</code>). Si dà in pasto lo stesso segnale a <code>predictive/forecast_failures.py</code> (§2.8) e si confronta il suo lead time previsto con quello atteso: <code>errore = lead_time_previsto − lead_time_atteso</code>. L'MAE (1.6s) è la media del valore assoluto di questo errore sui tre scenari — un numero piccolo perché il segnale è, per costruzione del test, una retta pulita senza rumore: è una misura della correttezza del calcolo analitico d'incrocio, non (solo) della qualità del fit su dati rumorosi reali.</p>
+<div class="diagram">
+<svg viewBox="0 0 374.045625 217.651062" width="100%" style="max-width:281pt; display:block; margin:0 auto;" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+ <defs>
+  <style type="text/css">
+*{stroke-linecap:butt;stroke-linejoin:round;}
+  </style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 217.651062
+L 374.045625 217.651062
+L 374.045625 0
+L 0 0
+z
+" style="fill:none;"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 78.526094 182.030438
+L 357.526094 182.030438
+L 357.526094 26.798438
+L 78.526094 26.798438
+z
+" style="fill:none;"/>
+   </g>
+   <g id="patch_3">
+    <path clip-path="url(#pe7fa88b859)" d="M 261.868951 174.974437
+L 102.440379 174.974437
+L 102.440379 134.654438
+L 261.868951 134.654438
+z
+" style="fill:#4c8a3f;"/>
+   </g>
+   <g id="patch_4">
+    <path clip-path="url(#pe7fa88b859)" d="M 261.868951 124.574438
+L 139.170608 124.574438
+L 139.170608 84.254438
+L 261.868951 84.254438
+z
+" style="fill:#4c8a3f;"/>
+   </g>
+   <g id="patch_5">
+    <path clip-path="url(#pe7fa88b859)" d="M 261.868951 74.174438
+L 124.813229 74.174438
+L 124.813229 33.854438
+L 261.868951 33.854438
+z
+" style="fill:#4c8a3f;"/>
+   </g>
+   <g id="matplotlib.axis_1">
+    <g id="xtick_1">
+     <g id="line2d_1">
+      <path clip-path="url(#pe7fa88b859)" d="M 85.704784 182.030438
+L 85.704784 26.798438
+" style="fill:none;stroke:#eef1f6;stroke-linecap:square;stroke-width:0.8;"/>
+     </g>
+     <g id="line2d_2">
+      <defs>
+       <path d="M 0 0
+L 0 3.5
+" id="mdc9d172ea5" style="stroke:#333333;stroke-width:0.8;"/>
+      </defs>
+      <g>
+       <use style="fill:#333333;stroke:#333333;stroke-width:0.8;" x="85.704784" xlink:href="#mdc9d172ea5" y="182.030438"/>
+      </g>
+     </g>
+     <g id="text_1">
+      <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;font-style:normal;font-weight:normal;text-anchor:middle;" transform="rotate(-0, 85.704784, 195.869031)" x="85.704784" y="195.869031">−2.0</text>
+     </g>
+    </g>
+    <g id="xtick_2">
+     <g id="line2d_3">
+      <path clip-path="url(#pe7fa88b859)" d="M 129.745825 182.030438
+L 129.745825 26.798438
+" style="fill:none;stroke:#eef1f6;stroke-linecap:square;stroke-width:0.8;"/>
+     </g>
+     <g id="line2d_4">
+      <g>
+       <use style="fill:#333333;stroke:#333333;stroke-width:0.8;" x="129.745825" xlink:href="#mdc9d172ea5" y="182.030438"/>
+      </g>
+     </g>
+     <g id="text_2">
+      <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;font-style:normal;font-weight:normal;text-anchor:middle;" transform="rotate(-0, 129.745825, 195.869031)" x="129.745825" y="195.869031">−1.5</text>
+     </g>
+    </g>
+    <g id="xtick_3">
+     <g id="line2d_5">
+      <path clip-path="url(#pe7fa88b859)" d="M 173.786867 182.030438
+L 173.786867 26.798438
+" style="fill:none;stroke:#eef1f6;stroke-linecap:square;stroke-width:0.8;"/>
+     </g>
+     <g id="line2d_6">
+      <g>
+       <use style="fill:#333333;stroke:#333333;stroke-width:0.8;" x="173.786867" xlink:href="#mdc9d172ea5" y="182.030438"/>
+      </g>
+     </g>
+     <g id="text_3">
+      <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;font-style:normal;font-weight:normal;text-anchor:middle;" transform="rotate(-0, 173.786867, 195.869031)" x="173.786867" y="195.869031">−1.0</text>
+     </g>
+    </g>
+    <g id="xtick_4">
+     <g id="line2d_7">
+      <path clip-path="url(#pe7fa88b859)" d="M 217.827909 182.030438
+L 217.827909 26.798438
+" style="fill:none;stroke:#eef1f6;stroke-linecap:square;stroke-width:0.8;"/>
+     </g>
+     <g id="line2d_8">
+      <g>
+       <use style="fill:#333333;stroke:#333333;stroke-width:0.8;" x="217.827909" xlink:href="#mdc9d172ea5" y="182.030438"/>
+      </g>
+     </g>
+     <g id="text_4">
+      <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;font-style:normal;font-weight:normal;text-anchor:middle;" transform="rotate(-0, 217.827909, 195.869031)" x="217.827909" y="195.869031">−0.5</text>
+     </g>
+    </g>
+    <g id="xtick_5">
+     <g id="line2d_9">
+      <path clip-path="url(#pe7fa88b859)" d="M 261.868951 182.030438
+L 261.868951 26.798438
+" style="fill:none;stroke:#eef1f6;stroke-linecap:square;stroke-width:0.8;"/>
+     </g>
+     <g id="line2d_10">
+      <g>
+       <use style="fill:#333333;stroke:#333333;stroke-width:0.8;" x="261.868951" xlink:href="#mdc9d172ea5" y="182.030438"/>
+      </g>
+     </g>
+     <g id="text_5">
+      <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;font-style:normal;font-weight:normal;text-anchor:middle;" transform="rotate(-0, 261.868951, 195.869031)" x="261.868951" y="195.869031">0.0</text>
+     </g>
+    </g>
+    <g id="xtick_6">
+     <g id="line2d_11">
+      <path clip-path="url(#pe7fa88b859)" d="M 305.909993 182.030438
+L 305.909993 26.798438
+" style="fill:none;stroke:#eef1f6;stroke-linecap:square;stroke-width:0.8;"/>
+     </g>
+     <g id="line2d_12">
+      <g>
+       <use style="fill:#333333;stroke:#333333;stroke-width:0.8;" x="305.909993" xlink:href="#mdc9d172ea5" y="182.030438"/>
+      </g>
+     </g>
+     <g id="text_6">
+      <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;font-style:normal;font-weight:normal;text-anchor:middle;" transform="rotate(-0, 305.909993, 195.869031)" x="305.909993" y="195.869031">0.5</text>
+     </g>
+    </g>
+    <g id="xtick_7">
+     <g id="line2d_13">
+      <path clip-path="url(#pe7fa88b859)" d="M 349.951035 182.030438
+L 349.951035 26.798438
+" style="fill:none;stroke:#eef1f6;stroke-linecap:square;stroke-width:0.8;"/>
+     </g>
+     <g id="line2d_14">
+      <g>
+       <use style="fill:#333333;stroke:#333333;stroke-width:0.8;" x="349.951035" xlink:href="#mdc9d172ea5" y="182.030438"/>
+      </g>
+     </g>
+     <g id="text_7">
+      <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;font-style:normal;font-weight:normal;text-anchor:middle;" transform="rotate(-0, 349.951035, 195.869031)" x="349.951035" y="195.869031">1.0</text>
+     </g>
+    </g>
+    <g id="text_8">
+     <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;font-style:normal;font-weight:normal;text-anchor:middle;" transform="rotate(-0, 218.026094, 208.579344)" x="218.026094" y="208.579344">errore lead time previsto - atteso (s)</text>
+    </g>
+   </g>
+   <g id="matplotlib.axis_2">
+    <g id="ytick_1">
+     <g id="line2d_15">
+      <path clip-path="url(#pe7fa88b859)" d="M 78.526094 154.814437
+L 357.526094 154.814437
+" style="fill:none;stroke:#eef1f6;stroke-linecap:square;stroke-width:0.8;"/>
+     </g>
+     <g id="line2d_16">
+      <defs>
+       <path d="M 0 0
+L -3.5 0
+" id="maf078f3438" style="stroke:#333333;stroke-width:0.8;"/>
+      </defs>
+      <g>
+       <use style="fill:#333333;stroke:#333333;stroke-width:0.8;" x="78.526094" xlink:href="#maf078f3438" y="154.814437"/>
+      </g>
+     </g>
+     <g id="text_9">
+      <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;font-style:normal;font-weight:normal;text-anchor:end;" transform="rotate(-0, 71.526094, 158.108578)" x="71.526094" y="158.108578">motor_temp</text>
+     </g>
+    </g>
+    <g id="ytick_2">
+     <g id="line2d_17">
+      <path clip-path="url(#pe7fa88b859)" d="M 78.526094 104.414438
+L 357.526094 104.414438
+" style="fill:none;stroke:#eef1f6;stroke-linecap:square;stroke-width:0.8;"/>
+     </g>
+     <g id="line2d_18">
+      <g>
+       <use style="fill:#333333;stroke:#333333;stroke-width:0.8;" x="78.526094" xlink:href="#maf078f3438" y="104.414438"/>
+      </g>
+     </g>
+     <g id="text_10">
+      <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;font-style:normal;font-weight:normal;text-anchor:end;" transform="rotate(-0, 71.526094, 107.708578)" x="71.526094" y="107.708578">motor_current</text>
+     </g>
+    </g>
+    <g id="ytick_3">
+     <g id="line2d_19">
+      <path clip-path="url(#pe7fa88b859)" d="M 78.526094 54.014438
+L 357.526094 54.014438
+" style="fill:none;stroke:#eef1f6;stroke-linecap:square;stroke-width:0.8;"/>
+     </g>
+     <g id="line2d_20">
+      <g>
+       <use style="fill:#333333;stroke:#333333;stroke-width:0.8;" x="78.526094" xlink:href="#maf078f3438" y="54.014438"/>
+      </g>
+     </g>
+     <g id="text_11">
+      <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;font-style:normal;font-weight:normal;text-anchor:end;" transform="rotate(-0, 71.526094, 57.433734)" x="71.526094" y="57.433734">battery_pct</text>
+     </g>
+    </g>
+   </g>
+   <g id="line2d_21">
+    <path clip-path="url(#pe7fa88b859)" d="M 261.868951 182.030438
+L 261.868951 26.798438
+" style="fill:none;stroke:#999999;stroke-linecap:square;stroke-width:0.8;"/>
+   </g>
+   <g id="patch_6">
+    <path d="M 78.526094 182.030438
+L 78.526094 26.798438
+" style="fill:none;stroke:#c9d2e0;stroke-linecap:square;stroke-linejoin:miter;stroke-width:0.8;"/>
+   </g>
+   <g id="patch_7">
+    <path d="M 357.526094 182.030438
+L 357.526094 26.798438
+" style="fill:none;stroke:#c9d2e0;stroke-linecap:square;stroke-linejoin:miter;stroke-width:0.8;"/>
+   </g>
+   <g id="patch_8">
+    <path d="M 78.526094 182.030438
+L 357.526094 182.030438
+" style="fill:none;stroke:#c9d2e0;stroke-linecap:square;stroke-linejoin:miter;stroke-width:0.8;"/>
+   </g>
+   <g id="patch_9">
+    <path d="M 78.526094 26.798438
+L 357.526094 26.798438
+" style="fill:none;stroke:#c9d2e0;stroke-linecap:square;stroke-linejoin:miter;stroke-width:0.8;"/>
+   </g>
+   <g id="text_12">
+    <text style="fill:#333333;font-family:DejaVu Sans;font-size:8px;font-style:normal;font-weight:normal;text-anchor:start;" transform="rotate(-0, 266.273055, 157.021938)" x="266.273055" y="157.021938">-1.81s</text>
+   </g>
+   <g id="text_13">
+    <text style="fill:#333333;font-family:DejaVu Sans;font-size:8px;font-style:normal;font-weight:normal;text-anchor:start;" transform="rotate(-0, 266.273055, 106.621938)" x="266.273055" y="106.621938">-1.39s</text>
+   </g>
+   <g id="text_14">
+    <text style="fill:#333333;font-family:DejaVu Sans;font-size:8px;font-style:normal;font-weight:normal;text-anchor:start;" transform="rotate(-0, 266.273055, 56.221938)" x="266.273055" y="56.221938">-1.56s</text>
+   </g>
+   <g id="text_15">
+    <text style="fill:#10233f;font-family:DejaVu Sans;font-size:10px;font-style:normal;font-weight:normal;text-anchor:middle;" transform="rotate(-0, 218.026094, 14.798438)" x="218.026094" y="14.798438">Previsione offline (regressione lineare): errore su trend noti</text>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="pe7fa88b859">
+   <rect height="155.232" width="279" x="78.526094" y="26.798438"/>
+  </clipPath>
+ </defs>
+</svg>
+<div class="fig-caption">Fig. 5 — Errore fra lead time previsto e lead time atteso sui tre scenari sintetici a pendenza nota: sempre negativo (la previsione è leggermente prudente, cioè anticipa la scadenza reale) e sotto i 2 secondi in valore assoluto su orizzonti di centinaia di secondi.</div>
+</div>
 
 <h4>TAG — come si stabilisce se una risposta è corretta</h4>
 <p>Per ciascuna delle 22 domande di riferimento (<code>eval/reference_questions.py</code>) esiste una query SQL "di verità" scritta a mano. Lo script esegue <b>entrambe</b> le query sugli stessi dati storici: quella di riferimento direttamente via Spark SQL, e quella generata dal layer TAG passando dalla domanda in linguaggio naturale. Il confronto fra i due risultati (funzione <code>question_correct</code>/<code>row_matches</code>) non richiede un match testuale esatto della query SQL generata (due query sintatticamente diverse possono produrre lo stesso risultato corretto) — confronta invece <b>le righe restituite</b>: ogni riga della verità di riferimento deve avere una riga corrispondente nel risultato del TAG, con i valori numerici confrontati con una tolleranza (±0.5, per assorbire arrotondamenti) e i valori testuali confrontati per uguaglianza esatta. Una domanda è "corretta" solo se <i>tutte</i> le righe attese trovano una corrispondenza — non una corrispondenza parziale.</p>
@@ -710,13 +1346,15 @@ Fig. 0 — Il grafo del magazzino (<code>config/warehouse_graph.json</code>): 10
 
 <table>
   <tr><th>Metrica</th><th>Valore</th><th>Dettaglio</th></tr>
-  <tr><td>Detection salute — precision</td><td>1.00</td><td>8 robot sintetici, 3 con guasto noto (<code>spike_corrente</code>), 5 senza; 0 falsi positivi</td></tr>
+  <tr><td>Detection salute — precision</td><td>0.50</td><td>8 robot sintetici, 3 con guasto noto (<code>spike_corrente</code>), 5 senza; 3 falsi positivi su 5 robot sani</td></tr>
   <tr><td>Detection salute — recall</td><td>1.00</td><td>0 falsi negativi</td></tr>
-  <tr><td>Detection salute — F1</td><td>1.00</td><td>TP=3, FP=0, FN=0, TN=5</td></tr>
-  <tr><td>Previsione — errore medio assoluto (MAE)</td><td>1.6 s</td><td>su lead time previsti di centinaia di secondi (3 scenari sintetici a pendenza nota)</td></tr>
-  <tr><td>TAG — execution accuracy</td><td>21/22 (95%)</td><td>22 domande di riferimento in linguaggio naturale, confronto con SQL di verità scritto a mano</td></tr>
+  <tr><td>Detection salute — F1</td><td>0.67</td><td>TP=3, FP=3, FN=0, TN=2</td></tr>
+  <tr><td>Previsione live (streaming) — precision/recall/F1</td><td>1.00 / 1.00 / 1.00</td><td>6 robot sintetici, 3 con <code>preavviso_intermittente</code>; TP=3, FP=0, FN=0, TN=3</td></tr>
+  <tr><td>Previsione live — latenza media onset&rarr;previsione</td><td>62.2 s</td><td>coerente con la finestra di accumulo di 60s del quarto operatore stateful (§2.6)</td></tr>
+  <tr><td>Previsione offline — errore medio assoluto (MAE)</td><td>1.6 s</td><td>su lead time previsti di centinaia di secondi (3 scenari sintetici a pendenza nota)</td></tr>
+  <tr><td>TAG — execution accuracy</td><td>20/22 (91%)</td><td>22 domande di riferimento in linguaggio naturale, confronto con SQL di verità scritto a mano</td></tr>
 </table>
-<p>L'unica domanda TAG "sbagliata" ("qual è la temperatura media dei robot con guasti") si è rivelata un'<b>ambiguità genuina della domanda</b>, non un errore del sistema: la query di riferimento calcola la media su tutta la telemetria dei robot coinvolti, mentre il modello ha scelto — in modo altrettanto legittimo — di calcolarla solo sulle anomalie di temperatura rilevate. È stata lasciata così come esempio concreto dei limiti intrinseci dell'interrogazione in linguaggio naturale, invece di correggere la domanda per farla "tornare" artificialmente.</p>
+<p>Una delle due domande TAG "sbagliate" in questo run è la stessa ambiguità già nota ("qual è la temperatura media dei robot con guasti") — la query di riferimento calcola la media su tutta la telemetria dei robot coinvolti, mentre il modello sceglie, in modo altrettanto legittimo, di calcolarla solo sulle anomalie di temperatura rilevate; è stata lasciata così come esempio concreto dei limiti intrinseci dell'interrogazione in linguaggio naturale, invece di correggere la domanda per farla "tornare" artificialmente. In run diversi il numero di domande corrette è oscillato fra 20 e 21 su 22 — un'ulteriore conferma che l'unico vero limite sistematico è quell'ambiguità dichiarata, non un errore ricorrente sulle stesse domande.</p>
 <div class="caveat">
 <b>Limite metodologico dichiarato.</b> Le metriche di detection sopra sono misurate sul generatore sintetico (Passo 12), non sulla flotta ROS/Gazebo reale: la ground truth richiede un numero di robot e di ripetizioni controllate che sarebbe troppo lento/costoso da ottenere avviando ripetutamente l'intera simulazione fisica. È un compromesso dichiarato, non nascosto: la pipeline di detection è identica sui due percorsi (stesso schema, stesso codice Spark), e la fedeltà fisica della sorgente ROS/Gazebo è stata comunque verificata qualitativamente e in modo end-to-end (§3.4), ma le cifre di precision/recall riportate qui non provano che la detection funzioni altrettanto bene sul rumore realistico della simulazione fisica quanto su quello, più pulito, del generatore sintetico.
 </div>
@@ -725,6 +1363,104 @@ Fig. 0 — Il grafo del magazzino (<code>config/warehouse_graph.json</code>): 10
 
 <h4>Throughput — come si definisce il punto di rottura</h4>
 <p>Lo sweep (<code>eval/run_efficiency.py</code>, funzione <code>run_throughput_sweep</code>) lancia il generatore sintetico a carichi crescenti (50, 100, 250, 500, 1000, 2000, 4000, 6000 robot-token, tutti a 10 Hz — target nominale <code>num_robot × hz</code> messaggi/secondo) e, per ciascun livello, legge dal generatore stesso quanti messaggi ha effettivamente pubblicato nell'intervallo (<code>achieved_rate_msgs_s</code>, calcolato lato produttore, non stimato lato consumatore). Il rapporto <code>ratio = raggiunto / target</code> è la misura di quanto il sistema regge quel livello di carico; il <b>punto di rottura</b> è definito come il primo target per cui <code>ratio</code> scende sotto una soglia fissa dell'80% (<code>BREAKING_POINT_RATIO = 0.8</code>) — una soglia arbitraria ma dichiarata, non dedotta a posteriori dai dati.</p>
+<div class="diagram">
+<svg viewBox="0 0 375.221563 233.827062" width="100%" style="max-width:281pt; display:block; margin:0 auto;" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+ <defs>
+  <style type="text/css">
+*{stroke-linecap:butt;stroke-linejoin:round;}
+  </style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 233.827062
+L 375.221563 233.827062
+L 375.221563 -0
+L 0 -0
+z
+" style="fill:none;"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 55.541562 198.206437
+L 368.021563 198.206437
+L 368.021563 20.798437
+L 55.541562 20.798437
+z
+" style="fill:none;"/>
+   </g>
+   <g id="matplotlib.axis_1">
+    <g id="text_8">
+     <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;font-style:normal;font-weight:normal;text-anchor:middle;" transform="rotate(-0, 211.781563, 224.755344)" x="211.781563" y="224.755344">numero di robot sintetici</text>
+    </g>
+    <g id="line2d_1"><path clip-path="url(#paa6d667865)" d="M 67.358033 198.206437 L 67.358033 20.798437" style="fill:none;stroke:#eef1f6;stroke-linecap:square;stroke-width:0.8;"/></g>
+    <g><text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;text-anchor:middle;" x="67.358033" y="212.045031">0</text></g>
+    <g><text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;text-anchor:middle;" x="115.101349" y="212.045031">1000</text></g>
+    <g><text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;text-anchor:middle;" x="162.844664" y="212.045031">2000</text></g>
+    <g><text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;text-anchor:middle;" x="210.58798" y="212.045031">3000</text></g>
+    <g><text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;text-anchor:middle;" x="258.331295" y="212.045031">4000</text></g>
+    <g><text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;text-anchor:middle;" x="306.074611" y="212.045031">5000</text></g>
+    <g><text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;text-anchor:middle;" x="353.817926" y="212.045031">6000</text></g>
+   </g>
+   <g id="matplotlib.axis_2">
+    <g id="text_16">
+     <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;font-style:normal;font-weight:normal;text-anchor:middle;" transform="rotate(-90, 14.038594, 109.502437)" x="14.038594" y="109.502437">messaggi/s</text>
+    </g>
+    <g><text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;text-anchor:end;" x="48.541562" y="194.917028">0</text></g>
+    <g><text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;text-anchor:end;" x="48.541562" y="167.811146">10000</text></g>
+    <g><text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;text-anchor:end;" x="48.541562" y="140.705264">20000</text></g>
+    <g><text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;text-anchor:end;" x="48.541562" y="113.599381">30000</text></g>
+    <g><text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;text-anchor:end;" x="48.541562" y="86.493499">40000</text></g>
+    <g><text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;text-anchor:end;" x="48.541562" y="59.387617">50000</text></g>
+    <g><text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;text-anchor:end;" x="48.541562" y="32.281734">60000</text></g>
+   </g>
+   <g id="line2d_29">
+    <path clip-path="url(#paa6d667865)" d="M 69.745199 190.142437
+L 72.132365 188.787143
+L 79.293862 184.721261
+L 91.229691 177.94479
+L 115.101349 164.391849
+L 162.844664 137.285967
+L 258.331295 83.074202
+L 353.817926 28.862437
+" style="fill:none;stroke:#5c6b82;stroke-dasharray:5.55,2.4;stroke-dashoffset:0;stroke-width:1.5;"/>
+   </g>
+   <g id="line2d_30">
+    <path clip-path="url(#paa6d667865)" d="M 69.745199 190.142437
+L 72.132365 188.787143
+L 79.293862 184.721532
+L 91.229691 177.945604
+L 115.101349 164.39456
+L 162.844664 137.293557
+L 258.331295 109.723893
+L 353.817926 107.555422
+" style="fill:none;stroke:#2b6cb0;stroke-linecap:square;stroke-width:1.5;"/>
+   </g>
+   <g id="line2d_31">
+    <path clip-path="url(#paa6d667865)" d="M 258.331295 198.206437 L 258.331295 20.798437" style="fill:none;stroke:#c07a1f;stroke-dasharray:1.2,1.98;stroke-dashoffset:0;stroke-width:1.2;"/>
+   </g>
+   <g id="text_17">
+    <text style="fill:#c07a1f;font-family:DejaVu Sans;font-size:8px;" x="177.167659" y="68.694776">punto di rottura</text>
+    <text style="fill:#c07a1f;font-family:DejaVu Sans;font-size:8px;" x="177.167659" y="77.653026">(~4000 robot)</text>
+   </g>
+   <g id="text_18">
+    <text style="fill:#10233f;font-family:DejaVu Sans;font-size:10px;text-anchor:middle;" x="211.781563" y="14.798437">Sweep di throughput: generatore sintetico a 10 Hz</text>
+   </g>
+   <g id="legend_1">
+    <path d="M 63.641562 32.587031 L 81.641562 32.587031" style="fill:none;stroke:#5c6b82;stroke-dasharray:5.55,2.4;stroke-dashoffset:0;stroke-width:1.5;"/>
+    <text style="fill:#222222;font-family:DejaVu Sans;font-size:9px;" x="88.841562" y="35.737031">target (n_robot × 10 Hz)</text>
+    <path d="M 63.641562 46.047656 L 81.641562 46.047656" style="fill:none;stroke:#2b6cb0;stroke-linecap:square;stroke-width:1.5;"/>
+    <text style="fill:#222222;font-family:DejaVu Sans;font-size:9px;" x="88.841562" y="49.197656">raggiunto</text>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="paa6d667865">
+   <rect height="177.408" width="312.48" x="55.541562" y="20.798437"/>
+  </clipPath>
+ </defs>
+</svg>
+<div class="fig-caption">Fig. 6 — Sweep di throughput: la curva raggiunta (blu) segue il target (grigio tratteggiato) fino a ~2000 robot, poi si stacca — il punto di rottura all'80% del target cade a ~4000 robot, dopo il quale il generatore satura a circa 31 000 msg/s indipendentemente da quanti robot in più vengono aggiunti.</div>
+</div>
 
 <h4>Latenza onset&rarr;alert — come si misura</h4>
 <p>Per ciascuna delle 5 prove (<code>run_latency_trials</code>): si inietta un guasto <code>spike_corrente</code> su un singolo robot-token e si legge, dal topic <code>injected_faults</code>, il timestamp reale di attivazione (<code>start_ts</code>, scritto dal codice che applica il guasto, non l'istante pianificato). Si attende quindi il primo evento su <code>anomalies</code> per quello stesso robot e si registra l'istante in cui lo script di test lo riceve. La latenza riportata è la differenza fra questi due istanti.</p>
@@ -732,16 +1468,154 @@ Fig. 0 — Il grafo del magazzino (<code>config/warehouse_graph.json</code>): 10
 <table>
   <tr><th>Metrica</th><th>Valore</th><th>Dettaglio</th></tr>
   <tr><td>Throughput — scaling pulito fino a</td><td>20 000 msg/s</td><td>100% del target raggiunto</td></tr>
-  <tr><td>Throughput — punto di rottura</td><td>~40 000 msg/s target</td><td>raggiunto 30 854 msg/s, 77% del target (sotto l'80%); degrado ulteriore a target più alti</td></tr>
-  <tr><td>Latenza onset&rarr;alert</td><td>media 30.2 s (3/5 prove riuscite)</td><td>misura volutamente prudente/larga, vedi nota sotto</td></tr>
+  <tr><td>Throughput — punto di rottura</td><td>~40 000 msg/s target</td><td>raggiunto 30 968 msg/s, 75% del target (sotto l'80%); a 6000 robot il rapporto scende al 52%</td></tr>
+  <tr><td>Latenza onset&rarr;alert</td><td>media 30.3 s (3/5 prove riuscite)</td><td>misura volutamente prudente/larga, vedi nota sotto</td></tr>
 </table>
 <p>Il collo di bottiglia individuato per il throughput è il processo Python singolo del generatore sintetico (non Kafka o Spark, che nei test non mostrano saturazione alla stessa scala). Il numero di "~30s" di latenza onset&rarr;alert <b>non è la vera latenza minima del sistema</b> (osservata altrove, in condizioni dedicate, dell'ordine di pochi secondi, coerente col trigger di 2s della query di salute): il meccanismo di misura descritto sopra usa due consumer Kafka interrogati <b>in sequenza</b> (prima si attende la conferma del guasto, poi si comincia ad ascoltare gli alert), quindi il numero misura anche il tempo speso dallo script di test stesso prima di mettersi in ascolto, non solo il tempo che il sistema impiega a produrre l'alert — un limite dichiarato del metodo di misura, non delle prestazioni reali (§4.3 propone una misura più rigorosa come sviluppo futuro).</p>
+
+<h4>Latenza del loop di auto-riparazione sulla flotta reale (Passo 15/16)</h4>
+<p>A differenza delle due latenze sopra (misurate sul generatore sintetico), <code>run_selfhealing_latency_experiment</code> lavora sulla flotta ROS/Gazebo reale: richiede una simulazione già avviata (verificata via <code>GET /api/fleet-control/sim/status</code> prima di procedere — altrimenti l'esperimento viene saltato, non fallito) e misura, su due robot reali distinti presi da <code>config/experiment.json</code>, il tempo fra la comparsa dell'anomalia <code>type="previsione"</code> (stesso segnale della Fig. 4) e il momento in cui il robot riceve effettivamente il comando di andare al nodo di riparazione (<code>goal_node == repair_node</code> osservato sul topic <code>fleet_state</code>) — cioè l'unica delle tre latenze misurate end-to-end sull'intero anello percezione&rarr;decisione&rarr;attuazione, non solo sulla percezione. Sulle due prove eseguite: latenza media 20.2s, entrambe riuscite.</p>
+<div class="diagram">
+<svg viewBox="0 0 368.499741 248.282781" width="100%" style="max-width:276pt; display:block; margin:0 auto;" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+ <defs>
+  <style type="text/css">
+*{stroke-linecap:butt;stroke-linejoin:round;}
+  </style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 248.282781 L 368.499741 248.282781 L 368.499741 0 L 0 0 z" style="fill:none;"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 38.362813 215.294437 L 350.842812 215.294437 L 350.842812 26.798437 L 38.362813 26.798437 z" style="fill:none;"/>
+   </g>
+   <g id="patch_3">
+    <path clip-path="url(#pbe43288d3d)" d="M 52.566449 215.294437 L 113.837037 215.294437 L 113.837037 144.693917 L 52.566449 144.693917 z" style="fill:#2b6cb0;"/>
+   </g>
+   <g id="patch_4">
+    <path clip-path="url(#pbe43288d3d)" d="M 163.967518 215.294437 L 225.238107 215.294437 L 225.238107 70.297514 L 163.967518 70.297514 z" style="fill:#c07a1f;"/>
+   </g>
+   <g id="patch_5">
+    <path clip-path="url(#pbe43288d3d)" d="M 275.368588 215.294437 L 336.639176 215.294437 L 336.639176 168.207086 L 275.368588 168.207086 z" style="fill:#4c8a3f;"/>
+   </g>
+   <g id="matplotlib.axis_1">
+    <g id="text_1">
+     <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;" x="53.697212" y="229.133031">onset → alert</text>
+     <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;" x="37.599868" y="239.211062">(guasto persistente)</text>
+    </g>
+    <g id="text_2">
+     <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;" x="152.132656" y="229.133031">onset → previsione</text>
+     <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;" x="156.960312" y="239.211062">(streaming, soft)</text>
+    </g>
+    <g id="text_3">
+     <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;" x="250.708023" y="229.133031">previsione → riparazione</text>
+     <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;" x="250.820523" y="239.211062">dispacciata (flotta reale)</text>
+    </g>
+   </g>
+   <g id="matplotlib.axis_2">
+    <g id="text_13">
+     <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;font-style:normal;font-weight:normal;text-anchor:middle;" transform="rotate(-90, 14.038594, 121.046437)" x="14.038594" y="121.046437">latenza media (s)</text>
+    </g>
+    <g><text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;text-anchor:end;" x="31.362813" y="218.713734">0</text></g>
+    <g><text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;text-anchor:end;" x="31.362813" y="148.809391">30</text></g>
+    <g><text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;text-anchor:end;" x="31.362813" y="78.905047">60</text></g>
+   </g>
+   <g id="text_14">
+    <text style="fill:#333333;font-family:DejaVu Sans;font-size:8px;text-anchor:middle;" x="83.201743" y="138.680259">30.3s (n=3)</text>
+   </g>
+   <g id="text_15">
+    <text style="fill:#333333;font-family:DejaVu Sans;font-size:8px;text-anchor:middle;" x="194.602812" y="64.283857">62.2s (n=3)</text>
+   </g>
+   <g id="text_16">
+    <text style="fill:#333333;font-family:DejaVu Sans;font-size:8px;text-anchor:middle;" x="306.003882" y="162.193429">20.2s (n=2)</text>
+   </g>
+   <g id="text_17">
+    <text style="fill:#10233f;font-family:DejaVu Sans;font-size:10px;text-anchor:middle;" x="194.602812" y="14.798437">Latenza end-to-end lungo la pipeline, tre punti di misura</text>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="pbe43288d3d">
+   <rect height="188.496" width="312.48" x="38.362813" y="26.798437"/>
+  </clipPath>
+ </defs>
+</svg>
+<div class="fig-caption">Fig. 7 — Le tre latenze misurate in questo progetto non sono comparabili come "numero unico": misurano tratti diversi della pipeline (percezione grezza, accumulo di evidenza in streaming, intero anello fino all'attuazione fisica) con metodi di misura diversi (§3.2, nota sul metodo prudente della prima barra).</div>
+</div>
 
 <h3>3.3 Valutazione sulla scalabilità</h3>
 <p>Il sistema ha due assi di scala molto diversi fra loro, con colli di bottiglia diversi — vale la pena distinguerli invece di parlare di "scalabilità" come se fosse un unico numero.</p>
 
 <h4>Scala del volume di dati (ingestion/detection): il generatore sintetico</h4>
-<p>Kafka e Spark, nei test dello sweep (§3.2), non hanno mai mostrato di essere il collo di bottiglia fino a decine di migliaia di messaggi al secondo — il limite osservato (~40 000 msg/s target, 77% raggiunto) è nel <b>generatore sintetico stesso</b>: un singolo processo Python (§2.5), limitato dal GIL e dalla schedulazione a coda di priorità di migliaia di robot-token nello stesso processo. La strada di scala orizzontale già prevista nel codice, se servisse spingersi oltre, è lanciare più istanze del generatore in parallelo (prefissi <code>robot_id</code> diversi) invece di riscrivere lo script con multiprocessing — non è stato necessario esercitarla per questo progetto. Lato Kafka, la scelta della chiave <code>robot_id</code> (§2.4) predispone ad aumentare le partizioni per parallelizzare ulteriormente la lettura, un margine non ancora sfruttato nella configurazione attuale (un solo broker, partizione singola di default).</p>
+<p>Kafka e Spark, nei test dello sweep (§3.2), non hanno mai mostrato di essere il collo di bottiglia fino a decine di migliaia di messaggi al secondo — il limite osservato (~40 000 msg/s target, 75% raggiunto) è nel <b>generatore sintetico stesso</b>: un singolo processo Python (§2.5), limitato dal GIL e dalla schedulazione a coda di priorità di migliaia di robot-token nello stesso processo. La strada di scala orizzontale già prevista nel codice, se servisse spingersi oltre, è lanciare più istanze del generatore in parallelo (prefissi <code>robot_id</code> diversi) invece di riscrivere lo script con multiprocessing — non è stato necessario esercitarla per questo progetto. Lato Kafka, la scelta della chiave <code>robot_id</code> (§2.4) predispone ad aumentare le partizioni per parallelizzare ulteriormente la lettura, un margine non ancora sfruttato nella configurazione attuale (un solo broker, partizione singola di default).</p>
+
+<h4>Il throughput regge, ma la qualità della detection sotto carico no: <code>run_scalability_experiment</code></h4>
+<p>Il throughput da solo non dice se il sistema resta <i>corretto</i> mentre il carico sale: <code>run_scalability_experiment</code> misura le due cose insieme, iniettando sempre esattamente 3 guasti reali (<code>spike_corrente</code>) su un numero di robot sintetici crescente (100, 1500, 5000, tutti a 3 Hz) e calcolando precision/recall della detection di salute a ciascun livello.</p>
+<table>
+  <tr><th>Robot sintetici</th><th>Throughput raggiunto</th><th>Precision</th><th>Recall</th><th>TP / FP / FN</th></tr>
+  <tr><td>100</td><td>300 msg/s (100% target)</td><td>0.043</td><td>1.00</td><td>3 / 66 / 0</td></tr>
+  <tr><td>1500</td><td>4500 msg/s (100% target)</td><td>0.007</td><td>0.67</td><td>2 / 272 / 1</td></tr>
+  <tr><td>5000</td><td>14 999 msg/s (100% target)</td><td>0.004</td><td>1.00</td><td>3 / 737 / 0</td></tr>
+</table>
+<div class="diagram">
+<svg viewBox="0 0 360.903125 233.827062" width="100%" style="max-width:271pt; display:block; margin:0 auto;" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+ <defs>
+  <style type="text/css">
+*{stroke-linecap:butt;stroke-linejoin:round;}
+  </style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 233.827062 L 360.903125 233.827062 L 360.903125 -0 L 0 -0 z" style="fill:none;"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 41.223125 198.206437 L 353.703125 198.206437 L 353.703125 20.798437 L 41.223125 20.798437 z" style="fill:none;"/>
+   </g>
+   <g id="matplotlib.axis_1">
+    <g><text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;text-anchor:middle;" x="55.426761" y="212.045031">100</text></g>
+    <g><text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;text-anchor:middle;" x="252.072641" y="212.045031">1500</text></g>
+    <g><text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;text-anchor:middle;" x="339.499489" y="212.045031">5000</text></g>
+    <g id="text_11">
+     <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;font-style:normal;font-weight:normal;text-anchor:middle;" transform="rotate(-0, 197.463125, 224.755344)" x="197.463125" y="224.755344">numero di robot sintetici (scala log)</text>
+    </g>
+   </g>
+   <g id="matplotlib.axis_2">
+    <g><text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;text-anchor:end;" x="34.223125" y="193.561734">0.0</text></g>
+    <g><text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;text-anchor:end;" x="34.223125" y="129.049734">0.4</text></g>
+    <g><text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;text-anchor:end;" x="34.223125" y="64.537734">0.8</text></g>
+    <g><text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;text-anchor:end;" x="34.223125" y="32.281734">1.0</text></g>
+    <g id="text_11b">
+     <text style="fill:#333333;font-family:DejaVu Sans;font-size:9px;font-style:normal;font-weight:normal;text-anchor:middle;" transform="rotate(-90, 14.038594, 109.502437)" x="14.038594" y="109.502437">precision / recall</text>
+    </g>
+   </g>
+   <g id="line2d_32">
+    <path clip-path="url(#pd047bb520b)" d="M 55.426761 183.130264 L 252.072641 188.965211 L 339.499489 189.4886" style="fill:none;stroke:#c0392b;stroke-linecap:square;stroke-width:1.5;"/>
+   </g>
+   <g id="line2d_33">
+    <path clip-path="url(#pd047bb520b)" d="M 55.426761 28.862437 L 252.072641 82.622437 L 339.499489 28.862437" style="fill:none;stroke:#4c8a3f;stroke-linecap:square;stroke-width:1.5;"/>
+   </g>
+   <g id="text_12">
+    <text style="fill:#10233f;font-family:DejaVu Sans;font-size:10px;font-style:normal;font-weight:normal;text-anchor:middle;" transform="rotate(-0, 197.463125, 14.798437)" x="197.463125" y="14.798437">Detection sotto carico crescente (3 guasti reali su N robot)</text>
+   </g>
+   <g id="legend_1">
+    <path d="M 49.323125 102.230719 L 67.323125 102.230719" style="fill:none;stroke:#c0392b;stroke-linecap:square;stroke-width:1.5;"/>
+    <text style="fill:#222222;font-family:DejaVu Sans;font-size:9px;" x="74.523125" y="105.380719">precision</text>
+    <path d="M 49.323125 115.441031 L 67.323125 115.441031" style="fill:none;stroke:#4c8a3f;stroke-linecap:square;stroke-width:1.5;"/>
+    <text style="fill:#222222;font-family:DejaVu Sans;font-size:9px;" x="74.523125" y="118.591031">recall</text>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="pd047bb520b">
+   <rect height="177.408" width="312.48" x="41.223125" y="20.798437"/>
+  </clipPath>
+ </defs>
+</svg>
+<div class="fig-caption">Fig. 8 — Precision e recall della detection di salute mentre il numero di robot sintetici cresce da 100 a 5000, a parità di soli 3 guasti reali iniettati: il recall resta alto (quasi sempre 1.00), la precision crolla verso zero.</div>
+</div>
+<p><b>Perché la precision crolla, e perché non è (solo) un difetto</b>: il numero di veri positivi resta fisso a 3 per costruzione dell'esperimento (sempre e solo 3 robot guastati, indipendentemente da N), mentre il numero di falsi positivi cresce con N — nei tre livelli il tasso di falso allarme per singolo robot sano è risultato rispettivamente ~68%, ~18%, ~15%, non trascurabile a nessuna scala. La causa è la stessa individuata nella variabilità di run-to-run di §3.1: queste soglie di salute sono <b>quelle di default</b> (§2.7), non quelle calibrate su storico da <code>adaptive_thresholds.py</code>, perché un run sintetico di poche decine di secondi non ha né il tempo né lo storico per una calibrazione — il random walk della telemetria sintetica, a 3 Hz per soli 20 secondi, sconfina abbastanza spesso oltre una soglia fissa da produrre un flusso di falsi positivi che, sommato su migliaia di robot, seppellisce i 3 veri. Il recall resta comunque solido (il segnale vero, uno spike deciso, resta distinguibile dal rumore anche a scala alta): è la precision, non la capacità di individuare i guasti reali, a pagare il prezzo di soglie statiche su un carico sintetico ad alta cardinalità e osservazione breve — un limite del metodo di calibrazione delle soglie in questo scenario di test, non della logica di detection in sé (§4.2).</p>
 
 <h4>Scala del numero di robot reali (ROS/Gazebo): un problema diverso, di CPU condivisa</h4>
 <p>Qui il vincolo non è il throughput dei dati (pochi robot × ~2Hz è un carico minuscolo per Kafka/Spark) ma la <b>simulazione fisica</b>: Gazebo deve calcolare la dinamica, il lidar e la pianificazione locale di ogni robot in tempo reale, un costo che cresce con il numero di robot indipendentemente da quanto sia leggero il resto della pipeline. Il progetto offre due scenari selezionabili (<code>small</code>: 4 robot, <code>large</code>: 8 robot, §2.11) proprio perché aggiungerne altri non è una questione di codice ma di CPU disponibile sulla macchina host.</p>
@@ -816,7 +1690,7 @@ Fig. 0 — Il grafo del magazzino (<code>config/warehouse_graph.json</code>): 10
   <li>Un controllo per-robot dei processi ROS in <code>fleet_control_service.py</code>, per un decommissioning che fermi davvero il nodo invece di limitarsi a nasconderlo dalla dashboard.</li>
 </ul>
 
-<p class="footer-note">Relazione generata a partire dalla documentazione tecnica di progetto (<code>CLAUDE.md</code>, <code>PLAN.md</code>, <code>docs/passi/*.md</code>), redatta passo per passo durante lo sviluppo e verificata empiricamente ad ogni fase.</p>
+<p class="footer-note">Relazione redatta passo per passo durante lo sviluppo (vedi <code>docs/passi/</code> per il dettaglio di ciascuna fase) e verificata empiricamente ad ogni fase.</p>
 
 </body>
 </html>

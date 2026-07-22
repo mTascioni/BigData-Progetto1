@@ -1,6 +1,6 @@
-"""Conformita' allo schema dei messaggi (CLAUDE.md e' l'unica fonte di
-verita'): verificato sui dati che circolano DAVVERO sui topic Kafka in
-questo momento, non su fixture statiche."""
+"""Conformita' allo schema condiviso dei messaggi: verificato sui dati che
+circolano DAVVERO sui topic Kafka in questo momento, non su fixture
+statiche."""
 from conftest import collect_messages, consume_topic, query_sql, start_consumer, start_generator, wait_generator_done
 
 TELEMETRY_FIELDS = {
@@ -26,7 +26,7 @@ PREDICTIONS_FIELDS = {
 }
 
 
-def test_telemetry_schema_conforme_a_claude_md():
+def test_telemetry_schema_conforme_al_contratto_condiviso():
     # la simulazione ROS reale e' in pausa per tutta la sessione di test
     # (vedi conftest.py, _pause_real_simulation): si usa il generatore per
     # avere comunque telemetria live da verificare.

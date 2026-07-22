@@ -16,7 +16,7 @@ Con `-s` si vedono anche i numeri stampati dai test di efficiency (throughput/la
 
 | File | Cosa verifica |
 |---|---|
-| `test_schema.py` | I messaggi che circolano DAVVERO sui topic (non fixture statiche) rispettano lo schema di CLAUDE.md |
+| `test_schema.py` | I messaggi che circolano DAVVERO sui topic (non fixture statiche) rispettano lo schema di telemetria condiviso |
 | `test_fault_ground_truth.py` | Un guasto iniettato dal generatore produce un record `injected_faults` corretto (tipo, timing, parametri) |
 | `test_detection_effectiveness.py` | Veri/falsi positivi sui tre meccanismi di detection (salute, livelock, deadlock) |
 | `test_prediction_accuracy.py` | La regressione lineare (Passo 9) prevede correttamente il lead time su un trend sintetico noto analiticamente |

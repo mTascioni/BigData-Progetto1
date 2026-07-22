@@ -1,6 +1,6 @@
 # Passo 7 — Detection in streaming (REAL-TIME, PySpark)
 
-**Obiettivo (da PLAN.md):** consumare `telemetry`. Salute: soglie + Isolation Forest. Livelock: finestra in cui il robot è attivo ma la distanza sul grafo dal `goal_node` non cala + revisite di nodi. Deadlock: >=2 robot `blocked` in mutua contesa sugli archi su finestra. Scrivere `anomalies` e lo stato flotta su `fleet_state`.
+**Obiettivo:** consumare `telemetry`. Salute: soglie + Isolation Forest. Livelock: finestra in cui il robot è attivo ma la distanza sul grafo dal `goal_node` non cala + revisite di nodi. Deadlock: >=2 robot `blocked` in mutua contesa sugli archi su finestra. Scrivere `anomalies` e lo stato flotta su `fleet_state`.
 **Deliverable atteso:** anomalie in tempo reale + stato per la dashboard.
 
 Il passo più corposo finora: un vero job PySpark Structured Streaming, con tre meccanismi di detection indipendenti sulla stessa sorgente Kafka.
@@ -90,7 +90,7 @@ docker exec -d shf-spark-master bash -c "
 
 ## Correzione (2026-07-21, dopo il Passo 11): falsi positivi di livelock su robot in movimento normale
 
-Segnalato dall'utente osservando la dashboard: robot marcati con l'indicatore di livelock pur muovendosi normalmente, senza altri robot vicini. Verificato con dati reali (non solo rileggendo il codice): un robot che avanza in modo continuo e regolare su un arco da 10m a velocità di crociera (~0.13-0.2 m/s) impiega **~40-75s** ad attraversarlo — più della finestra di 30s del rilevatore.
+Osservato dalla dashboard: robot marcati con l'indicatore di livelock pur muovendosi normalmente, senza altri robot vicini. Verificato con dati reali (non solo rileggendo il codice): un robot che avanza in modo continuo e regolare su un arco da 10m a velocità di crociera (~0.13-0.2 m/s) impiega **~40-75s** ad attraversarlo — più della finestra di 30s del rilevatore.
 
 **Causa**: `dist_to_goal` agganciava `(x, y)` al **nodo più vicino** (`nearest_node`) e guardava la distanza-su-grafo precalcolata da quel nodo al `goal_node` — non una distanza continua lungo l'arco. Per circa metà del tempo di attraversamento di un arco (finché il robot resta più vicino al nodo di partenza che a quello di arrivo), `dist_to_goal` restava **perfettamente costante**, anche con il robot in movimento reale e ininterrotto. Confermato con telemetria reale (R1 su arco F-G, x da 20.0 a 23.33 in 26s, velocità costante) e con gli eventi `anomalies` osservati nella stessa finestra: `min_dist == max_dist` **esatto** (0.0, 10.0, 20.0 — multipli esatti di lunghezze di arco) in quasi ogni evento di livelock, la firma inequivocabile della discretizzazione.
 
@@ -112,7 +112,7 @@ Nota a margine trovata durante l'indagine: con 3 query streaming concorrenti (Pa
 
 ## Correzione 3 (2026-07-21): terzo bug di falsi positivi — la Correzione 2 non bastava
 
-Segnalato di nuovo dall'utente osservando la dashboard: robot marcati in livelock durante un sorpasso normale su un corridoio a corsia singola (rallenta, supera l'altro robot, riparte) — comportamento di traffico ordinario, non uno stallo.
+Osservato di nuovo dalla dashboard: robot marcati in livelock durante un sorpasso normale su un corridoio a corsia singola (rallenta, supera l'altro robot, riparte) — comportamento di traffico ordinario, non uno stallo.
 
 **Causa**: anche con la Correzione 2 (finestra chiusa per intero, non parziale), il rilevatore restava una valutazione **su una singola finestra isolata di 30s**: bastava che il progresso netto in *quella* finestra fosse sotto soglia, senza nessun requisito che l'assenza di progresso *persistesse nel tempo*. Un breve accodamento durante un sorpasso rientra facilmente in una finestra da 30s con poco progresso netto, pur essendo un evento normale che si risolve da solo poco dopo — la definizione di livelock (stallo *prolungato*, non un singolo campionamento) non era davvero implementata.
 

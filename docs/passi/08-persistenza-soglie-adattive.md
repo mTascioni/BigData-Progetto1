@@ -1,6 +1,6 @@
 # Passo 8 — Persistenza + soglie adattive
 
-**Obiettivo (da PLAN.md):** persistere `telemetry`, `anomalies`, `injected_faults` su Parquet/Delta. Job che tara soglie adattive per ridurre i falsi positivi, con feedback verso lo streaming.
+**Obiettivo:** persistere `telemetry`, `anomalies`, `injected_faults` su Parquet/Delta. Job che tara soglie adattive per ridurre i falsi positivi, con feedback verso lo streaming.
 **Deliverable atteso:** storico + adattamento.
 
 ## Cosa è stato costruito
@@ -9,7 +9,7 @@
 
 **`streaming/schemas.py`** (nuovo) — gli schemi Spark (`TELEMETRY_SCHEMA`, `ANOMALIES_SCHEMA`, `INJECTED_FAULTS_SCHEMA`) centralizzati qui, riusati sia da `detection_job.py` (che prima li duplicava) sia da `persistence_job.py`. `ANOMALIES_SCHEMA` è un superset nullable dei campi dei tre tipi di anomalia — `from_json` lascia a `null` i campi non pertinenti a un dato `type`, senza bisogno di tre schemi separati.
 
-**`offline/adaptive_thresholds.py`** (nuovo, nella cartella che `CLAUDE.md` riserva esplicitamente alle "soglie adattive") — script batch (pandas, non Spark: per il volume di dati di questo progetto una `SparkSession` sarebbe overhead inutile) che:
+**`offline/adaptive_thresholds.py`** (nuovo, nella cartella dedicata alle soglie adattive) — script batch (pandas, non Spark: per il volume di dati di questo progetto una `SparkSession` sarebbe overhead inutile) che:
 
 1. Legge lo storico Parquet (`telemetry`, `anomalies` di tipo `salute`, `injected_faults`).
 2. Usa `injected_faults` come **ground truth**: un'anomalia di salute è un vero positivo se il suo `ts` cade dentro la finestra `[start_ts, end_ts]` di un guasto reale per quel `robot_id`; altrimenti è un falso positivo.

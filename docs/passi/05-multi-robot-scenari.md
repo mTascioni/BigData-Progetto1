@@ -1,6 +1,6 @@
 # Passo 5 — Multi-robot + scenari
 
-**Obiettivo (da PLAN.md):** scala a N TurtleBot (namespacing) e imposta gli scenari `deadlock`/`livelock` (corridoi a corsia singola + task opposti). Tieni N modesto: uno stack di navigazione per robot è pesante in CPU.
+**Obiettivo:** scala a N TurtleBot (namespacing) e imposta gli scenari `deadlock`/`livelock` (corridoi a corsia singola + task opposti). Tieni N modesto: uno stack di navigazione per robot è pesante in CPU.
 **Deliverable atteso:** flotta reale con conflitti di traffico riproducibili.
 
 ## Cosa è stato costruito

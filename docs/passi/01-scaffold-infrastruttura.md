@@ -1,6 +1,6 @@
 # Passo 1 — Scaffold + infrastruttura
 
-**Obiettivo (da PLAN.md):** struttura del repo e `docker-compose.yml` con Kafka, Spark, servizio Node e container ROS (Noetic + TurtleBot3; noVNC per la GUI in debug).
+**Obiettivo:** struttura del repo e `docker-compose.yml` con Kafka, Spark, servizio Node e container ROS (Noetic + TurtleBot3; noVNC per la GUI in debug).
 **Deliverable atteso:** i container si avviano, Kafka raggiungibile.
 
 ## Struttura del repo creata
@@ -27,7 +27,7 @@ BigData-Progetto1/
   docs/passi/        (questo file e i successivi)
 ```
 
-Le cartelle non ancora popolate contengono un `.gitkeep` per essere tracciate da git fin da subito, secondo la struttura di repo fissata in `CLAUDE.md`.
+Le cartelle non ancora popolate contengono un `.gitkeep` per essere tracciate da git fin da subito, secondo la struttura di repo pianificata all'inizio del progetto.
 
 ## Servizi in `docker-compose.yml`
 
@@ -99,7 +99,7 @@ Dal Passo 11 in poi la pipeline aveva accumulato diversi processi da lanciare a 
 
 ## Aggiornamento (2026-07-21): la simulazione ROS non parte più da sola
 
-Revisione parziale di quanto sopra, su richiesta esplicita dell'utente: si era accorto che i robot reali si muovevano già prima ancora di aprire la dashboard, e si aspettava di poter decidere lui quando farli partire (e con quale scala, small/large — Passo 14). L'avvio automatico di `sim_multi_robot` (unico fra i programmi supervisord elencati sopra) è stato quindi disattivato: **Kafka, Spark, `generator_service`, `fleet_control_service`, `eval_service` restano ad avvio automatico** (nessuna azione richiesta per averli disponibili), ma la simulazione ROS/Gazebo ora **richiede un comando esplicito** dell'utente — dalla dashboard (card "Flotta reale — controllo", nuovo selettore di scala + bottoni Avvia/Ferma) o da riga di comando (`supervisorctl start/stop sim_multi_robot` dentro il container `ros`).
+Revisione parziale di quanto sopra: i robot reali si muovevano già prima ancora di aprire la dashboard, mentre l'idea era poter decidere quando farli partire (e con quale scala, small/large — Passo 14). L'avvio automatico di `sim_multi_robot` (unico fra i programmi supervisord elencati sopra) è stato quindi disattivato: **Kafka, Spark, `generator_service`, `fleet_control_service`, `eval_service` restano ad avvio automatico** (nessuna azione richiesta per averli disponibili), ma la simulazione ROS/Gazebo ora **richiede un comando esplicito** dell'utente — dalla dashboard (card "Flotta reale — controllo", nuovo selettore di scala + bottoni Avvia/Ferma) o da riga di comando (`supervisorctl start/stop sim_multi_robot` dentro il container `ros`).
 
 Realizzato riusando `fleet_control_service.py` (già presente dal Passo 14) invece di creare un nuovo servizio: due nuove route, `POST /sim/start {"scale": "small"|"large"}` e `POST /sim/stop`, che richiamano `supervisorctl start/stop sim_multi_robot` — lo stesso identico meccanismo già usato da `test/conftest.py` per mettere in pausa la simulazione durante i test, quindi nessuna incompatibilità con la suite esistente. Un dettaglio tecnico non ovvio: il comando di un programma supervisord è statico nel file di configurazione, non può ricevere argomenti diversi ad ogni `start`; la scala scelta viene quindi scritta in un file marcatore (`/tmp/shf_scale`) **prima** di invocare `supervisorctl start`, e il comando del programma lo legge (`SCALE=$(cat /tmp/shf_scale 2>/dev/null || echo small)`) prima di lanciare `roslaunch ... scale:=$SCALE`. Un tentativo di avvio mentre la simulazione è già in corso (o di stop mentre è già ferma) risponde `409`, stesso pattern già in uso per il generatore sintetico (Passo 12).
 
@@ -115,4 +115,4 @@ Segnalato indirettamente dall'utente ("la simulazione parte molto in ritardo"), 
 
 ## Prossimo passo
 
-Passo 2 — Contratti dati: `config/warehouse_graph.json` e `config/experiment.json`, fissando lo schema del messaggio di telemetria già definito in `CLAUDE.md`.
+Passo 2 — Contratti dati: `config/warehouse_graph.json` e `config/experiment.json`, fissando lo schema del messaggio di telemetria definito come vincolo di partenza del progetto.

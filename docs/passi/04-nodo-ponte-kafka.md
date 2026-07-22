@@ -1,6 +1,6 @@
 # Passo 4 — Nodo-ponte ROS → Kafka
 
-**Obiettivo (da PLAN.md):** `rospy` che si sottoscrive ai topic, compone il messaggio nello schema condiviso (sintetizzando i canali di salute nominali) e pubblica su Kafka (`telemetry`, partizionato per `robot_id`).
+**Obiettivo:** `rospy` che si sottoscrive ai topic, compone il messaggio nello schema condiviso (sintetizzando i canali di salute nominali) e pubblica su Kafka (`telemetry`, partizionato per `robot_id`).
 **Deliverable atteso:** dati reali in Kafka. *(Suggerimento del piano: registra un rosbag e riproducilo per sviluppare a valle senza tenere Gazebo sempre acceso — fatto, vedi in fondo.)*
 
 ## Cosa è stato costruito
@@ -19,7 +19,7 @@ I campi non derivabili da ROS sono sintetizzati usando i parametri fissati al Pa
 
 - **`battery_pct`**: integrata nel tempo (non ricampionata da zero ogni tick) con il drain/charge rate del `task_state` corrente (`drain_rate_moving_pct_per_min`, `drain_rate_idle_pct_per_min`, `charge_rate_pct_per_min`), clampata [0,100].
 - **`motor_current`**, **`motor_temp`**: campionati ad ogni tick da una gaussiana centrata sul valore nominale (`nominal_a`/`nominal_c` ± `noise_std_*`). Nessuna firma di guasto qui — l'iniezione arriva al Passo 6, che andrà a sommarsi a questi valori nominali.
-- **`current_edge`**: `(x,y)` proiettato (clampato) su ciascun arco del grafo, arco con distanza minima vince — implementa alla lettera l'invariante "(x,y) mappato sull'arco occupato" di `CLAUDE.md`.
+- **`current_edge`**: `(x,y)` proiettato (clampato) su ciascun arco del grafo, arco con distanza minima vince — è così che `(x,y)` finisce mappato sull'arco occupato, non solo sul nodo più vicino.
 - **`task_state`**: euristica locale a partire dai segnali grezzi — `idle` se non c'è un goal attivo (`charging` se in quel momento il robot è entro 0.5m da un nodo di kind `charging`); se il goal è attivo, `moving` finché `|v_lin|` o `|v_ang|` superano una soglia entro gli ultimi 5s, altrimenti `blocked`. **Nota:** questa è solo un'euristica locale e istantanea, non la detection di deadlock/livelock vera e propria (quella guarda alla flotta nel suo insieme su una finestra temporale ed è compito dello Structured Streaming job del Passo 7).
 
 `ts` usa `time.time()` (orologio reale), non il tempo simulato di Gazebo (`rospy.get_time()`/`/clock`): con `use_sim_time=true` il tempo ROS riparte da zero ad ogni run e non è un epoch valido; inoltre a valle (Kafka/Spark) tutto gira in tempo reale, quindi i timestamp di telemetria devono restare comparabili con l'orologio reale del resto della pipeline, esattamente come farebbe un robot vero.
@@ -50,7 +50,7 @@ docker exec shf-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhos
 Simulazione lanciata come al Passo 3 (`roslaunch shf_bringup sim_single_robot.launch`, ora con `kafka_bridge` incluso), in parallelo `rosbag record` sui topic grezzi. Dump completo dei messaggi Kafka del topic `telemetry` e analisi con uno script Python (non salvato nel repo, verifica una tantum):
 
 - **3404 messaggi** ricevuti su Kafka nell'arco della run.
-- **Schema**: ogni messaggio ha tutti e 15 i campi del contratto di `CLAUDE.md`, tipi coerenti (numeri, stringhe, `null` per `goal_node`/`min_obstacle_dist` quando non ancora disponibili).
+- **Schema**: ogni messaggio ha tutti e 15 i campi del contratto dati, tipi coerenti (numeri, stringhe, `null` per `goal_node`/`min_obstacle_dist` quando non ancora disponibili).
 - **`goal_node`**, sequenza delle transizioni osservate: `None → B → C → F → G → J → H → C → B → A` — combacia esattamente con la `goal_sequence` di `R1` in `config/experiment.json`.
 - **`current_edge`**, transizioni osservate: `A-B → B-C → C-F → F-G → G-J → (C-D) → G-J → H-J → (G-J) → H-J → C-H → B-C → B-E → A-B` — segue correttamente il percorso; le brevi oscillazioni fra `G-J`/`H-J`/`C-D` intorno ai nodi `J`/`D` sono un **limite noto e atteso** dell'euristica "arco più vicino per distanza pura": vicino a un nodo dove più archi si toccano (o, per `D`, per una coincidenza geometrica — il segmento `G-J` passa esattamente per il punto `(30,0)` dove si trova il nodo `D`) la proiezione più vicina può oscillare tra due archi per pochi tick. Non impatta questo passo (che deve solo far arrivare dati reali su Kafka); da tenere presente se il Passo 7 userà `current_edge` per la detection di deadlock/livelock — soluzione rimandata a quel passo (es. isteresi: cambiare `current_edge` solo se il nuovo arco resta il più vicino per più tick consecutivi).
 - **`task_state`**: nessun falso `blocked` nella run (0 su 3404 messaggi) — coerente con un singolo robot senza conflitti di traffico.

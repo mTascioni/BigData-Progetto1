@@ -2,8 +2,8 @@
 """Job PySpark Structured Streaming di persistenza.
 
 Consuma i topic Kafka `telemetry`, `anomalies`, `injected_faults` e li
-scrive su Parquet (storico), nelle directory nominate in CLAUDE.md:
-`/data/telemetry`, `/data/anomalies`, `/data/injected_faults`.
+scrive su Parquet (storico), nelle directory condivise dal resto della
+pipeline: `/data/telemetry`, `/data/anomalies`, `/data/injected_faults`.
 
 A differenza di detection_job.py (real-time, legge solo i messaggi nuovi
 da quando parte), questo job legge `startingOffsets=earliest`: il suo
