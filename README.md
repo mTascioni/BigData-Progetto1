@@ -1,7 +1,7 @@
 # Self Healing Fleet
 
-Progetto personale per il corso di Big Data, Roma Tre, 2026.
-Prevede: ingestione continua di telemetria da una flotta di AGV (TurtleBot3 in ROS/Gazebo), detection real-time delle anomalie (salute e deadlock/livelock) con Spark Structured Streaming, previsione offline dei guasti, interrogazione in linguaggio naturale (→ SQL → esecuzione su Spark SQL → risposta sintetizzata) e dashboard live.
+Progetto personale per il corso di Big Data (RM3, 2026).
+Prevede: Sistema di anomaly detection basato su tecnologie di ingestione e analisi in streaming. In particolare: ingestione continua di telemetria da una flotta di AGV (TurtleBot3 in ROS/Gazebo), detection real-time delle anomalie (salute e deadlock/livelock) con Spark Structured Streaming, previsione offline dei guasti, interrogazione in linguaggio naturale (LLM → SQL → esecuzione su Spark SQL → risposta sintetizzata da LLM) e dashboard live.
 
 
 ### Nota sui requisiti
