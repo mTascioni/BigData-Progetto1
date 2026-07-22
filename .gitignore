@@ -4,4 +4,3 @@ __pycache__/
 .env
 *.log
 ros/bags/*.bag
-ros/bags/*.bag.active
