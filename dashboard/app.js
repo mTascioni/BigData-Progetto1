@@ -29,12 +29,6 @@ const recentEvents = [];
 const livePredictions = new Map();
 const PREDICTION_LIVE_TTL_MS = 120000;
 
-const activePerturbations = new Map();
-
-function markPerturbationActive(robotId, channel, durationS) {
-  activePerturbations.set(robotId, { channel, expiresAt: Date.now() + durationS * 1000 });
-}
-
 const RAW_STREAM_TOPICS = ["telemetry", "anomalies", "injected_faults", "fleet_state"];
 const MAX_RAW_LOG_LINES = 50;
 const rawStreamBuffers = Object.fromEntries(RAW_STREAM_TOPICS.map((t) => [t, []]));
@@ -444,17 +438,11 @@ function renderFleetTable() {
   const rows = [...robots.values()].sort((a, b) => a.robot_id.localeCompare(b.robot_id));
   const FLEET_TABLE_ROW_LIMIT = 200;
   const shown = rows.slice(0, FLEET_TABLE_ROW_LIMIT);
-  const now = Date.now();
   tbody.innerHTML = shown
     .map((r) => {
-      const perturbation = activePerturbations.get(r.robot_id);
-      const perturbing = perturbation && perturbation.expiresAt > now;
-      const robotLabel = perturbing
-        ? `${r.robot_id} <span class="perturbation-badge" title="Perturbazione attiva su ${perturbation.channel}">rumore: ${perturbation.channel}</span>`
-        : r.robot_id;
       return `
     <tr>
-      <td>${robotLabel}</td>
+      <td>${r.robot_id}</td>
       <td>${r.task_state}</td>
       <td>${Number(r.x).toFixed(2)}</td>
       <td>${Number(r.y).toFixed(2)}</td>
@@ -511,7 +499,7 @@ function renderRealFleetPanel() {
     .join("");
 
   const currentIds = new Set(realRobots.map((r) => r.robot_id));
-  for (const selectId of ["real-fault-robot", "real-perturbation-robot"]) {
+  for (const selectId of ["real-fault-robot"]) {
     const select = document.getElementById(selectId);
     const selectedIds = new Set([...select.options].map((o) => o.value));
     if (currentIds.size !== selectedIds.size || [...currentIds].some((id) => !selectedIds.has(id))) {
@@ -655,38 +643,6 @@ function setupRealFaultForm() {
   });
 }
 
-function setupRealPerturbationForm() {
-  document.getElementById("real-perturbation-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const robotId = document.getElementById("real-perturbation-robot").value;
-    const channel = document.getElementById("real-perturbation-channel").value;
-    const durationS = Number(document.getElementById("real-perturbation-duration").value);
-    const msgEl = document.getElementById("real-fleet-status-msg");
-    if (!robotId) {
-      msgEl.textContent = "Nessun robot reale disponibile al momento.";
-      return;
-    }
-    try {
-      const res = await fetch("/api/fleet-control/fault", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          robot_id: robotId,
-          fault_type: "rumore_sensore",
-          duration_s: durationS,
-          params: { channel },
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      markPerturbationActive(robotId, channel, durationS);
-      msgEl.textContent = `Perturbazione su ${channel} iniettata su ${robotId} (durata ${durationS}s) -- rumore, non un guasto.`;
-    } catch (err) {
-      msgEl.textContent = `Errore: ${err.message}`;
-    }
-  });
-}
-
 const FAULT_ROBOT_SELECT_LIMIT = 500;
 
 function faultRobotOptionsHtml() {
@@ -724,7 +680,6 @@ function addFaultRow() {
       <option value="batteria_collasso">batteria_collasso (battery_pct)</option>
       <option value="sensore_bloccato">sensore_bloccato (freeze)</option>
       <option value="preavviso_intermittente">preavviso_intermittente (raffiche, motor_current)</option>
-      <option value="rumore_sensore">rumore_sensore (perturbazione, non un guasto)</option>
     </select>
     <select class="fault-robot">${faultRobotOptionsHtml()}</select>
     <label>inizio(s) <input class="fault-start" type="number" value="10" min="0" /></label>
@@ -750,14 +705,14 @@ function populateLiveInjectRobotOptions(config) {
   const options = Array.from({ length: limited }, (_, i) => `${prefix}${String(i).padStart(5, "0")}`)
     .map((id) => `<option value="${id}">${id}</option>`)
     .join("");
-  for (const selectId of ["gen-live-fault-robot", "gen-live-perturbation-robot"]) {
+  for (const selectId of ["gen-live-fault-robot"]) {
     const select = document.getElementById(selectId);
     if (select.innerHTML !== options) select.innerHTML = options;
   }
 }
 
 function setGenLiveInjectEnabled(enabled) {
-  for (const id of ["gen-live-fault-robot", "gen-live-fault-btn", "gen-live-perturbation-robot", "gen-live-perturbation-btn"]) {
+  for (const id of ["gen-live-fault-robot", "gen-live-fault-btn"]) {
     document.getElementById(id).disabled = !enabled;
   }
 }
@@ -853,35 +808,6 @@ function setupGenLiveInjectionForms() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       msgEl.textContent = `Guasto '${faultType}' iniettato su ${robotId} (durata ${durationS}s).`;
-    } catch (err) {
-      msgEl.textContent = `Errore: ${err.message}`;
-    }
-  });
-
-  document.getElementById("gen-live-perturbation-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const robotId = document.getElementById("gen-live-perturbation-robot").value;
-    const channel = document.getElementById("gen-live-perturbation-channel").value;
-    const durationS = Number(document.getElementById("gen-live-perturbation-duration").value);
-    if (!robotId) {
-      msgEl.textContent = "Nessun robot disponibile (il run e' in corso?).";
-      return;
-    }
-    try {
-      const res = await fetch("/api/generator/fault", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          robot_id: robotId,
-          fault_type: "rumore_sensore",
-          duration_s: durationS,
-          params: { channel },
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      markPerturbationActive(robotId, channel, durationS);
-      msgEl.textContent = `Perturbazione su ${channel} iniettata su ${robotId} (durata ${durationS}s) -- rumore, non un guasto.`;
     } catch (err) {
       msgEl.textContent = `Errore: ${err.message}`;
     }
@@ -1092,7 +1018,6 @@ async function main() {
   setupGeneratorForm();
   setupGenLiveInjectionForms();
   setupRealFaultForm();
-  setupRealPerturbationForm();
   setupRawStreamPanel();
   setupSimControls();
   setupSimTabs();

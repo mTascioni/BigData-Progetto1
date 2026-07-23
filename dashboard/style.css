@@ -360,16 +360,6 @@ tr.robot-in-avaria td {
   color: #ff9a9a;
 }
 
-.perturbation-badge {
-  display: inline-block;
-  margin-left: 0.4rem;
-  padding: 0.05rem 0.4rem;
-  border-radius: 4px;
-  font-size: 0.7rem;
-  background: #3a2f52;
-  color: #d6bbfb;
-}
-
 .form-row {
   display: flex;
   flex-wrap: wrap;
