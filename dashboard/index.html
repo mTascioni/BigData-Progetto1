@@ -32,7 +32,7 @@
         <h2>Avvia simulazione</h2>
         <div class="tab-bar" id="sim-tabs" role="tablist">
           <button type="button" class="tab-btn active" data-tab="real" role="tab" aria-selected="true">Flotta ROS/Gazebo</button>
-          <button type="button" class="tab-btn" data-tab="synthetic" role="tab" aria-selected="false">Flotta "Sintetica" (senza simulazione)</button>
+          <button type="button" class="tab-btn" data-tab="synthetic" role="tab" aria-selected="false">Generazione Sintetica</button>
         </div>
 
         <div id="sim-tab-real" class="tab-panel">
@@ -185,7 +185,7 @@
 
     <section class="card">
       <h2>Robot a rischio</h2>
-      <p class="hint">Previsioni offline (regressione lineare, aggiornate ogni 5s) + previsioni live dallo streaming (istantanee, scompaiono da sole dopo 2min di inattivit&agrave;).</p>
+      <p class="hint">Previsioni offline (regressione lineare, ricalcolate ogni 20s su tutto lo storico) + previsioni live dallo streaming (istantanee, scompaiono da sole dopo 2min di inattivit&agrave;).</p>
       <table id="predictions-table">
         <thead>
           <tr><th>Robot</th><th>Canale</th><th>Valore</th><th>Soglia</th><th>Lead time</th></tr>

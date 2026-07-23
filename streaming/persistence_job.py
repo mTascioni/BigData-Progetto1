@@ -21,6 +21,7 @@ def read_topic(spark, topic, schema):
         .option("subscribe", topic)
         .option("startingOffsets", "earliest")
         .option("maxOffsetsPerTrigger", MAX_OFFSETS_PER_TRIGGER)
+        .option("failOnDataLoss", "false")
         .load()
     )
     return raw.select(F.from_json(F.col("value").cast("string"), schema).alias("m")).select("m.*")
